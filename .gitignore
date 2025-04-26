@@ -6,6 +6,25 @@ __pycache__/
 # C extensions
 *.so
 
+# ignore model output
+output/
+tmp/
+tmp_predict/
+predict/
+ref
+*.obj
+*.pkl
+*.pth
+*.ckpt
+*.txt
+
+# keep env
+!requirements.txt
+!requirements_debug.txt
+
+# a secret file which is invisible to participants
+evaluate.py
+
 # Distribution / packaging
 .Python
 build/
@@ -167,8 +186,6 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-# Ruff stuff:
-.ruff_cache/
-
 # PyPI configuration file
 .pypirc
+data
