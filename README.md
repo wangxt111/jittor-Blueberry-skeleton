@@ -46,7 +46,7 @@ pip install -r requirements.txt
 
 ## 数据下载
 
-[点击下载](https://cloud.tsinghua.edu.cn/f/bb928c12f86e4612bdd6/?dl=1)
+[点击下载](https://cloud.tsinghua.edu.cn/f/676c582527f34793bbac/?dl=1)
 
 下载后将其解压缩到当前根目录。
 
