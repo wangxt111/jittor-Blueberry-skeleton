@@ -14,6 +14,7 @@ from dataset.exporter import Exporter
 from models.skeleton import create_model
 
 from models.metrics import J2J
+import wandb
 
 # Set Jittor flags
 jt.flags.use_cuda = 1
@@ -25,6 +26,8 @@ def train(args):
     Args:
         args: Command line arguments
     """
+    wandb.init(project="jittor", name="baseline")
+
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
@@ -100,7 +103,7 @@ def train(args):
         for batch_idx, data in enumerate(train_loader):
             # Get data and labels
             vertices, joints = data['vertices'], data['joints']
-            
+
             vertices = vertices.permute(0, 2, 1)  # [B, 3, N]
 
             outputs = model(vertices)
@@ -128,6 +131,13 @@ def train(args):
                    f"Train Loss: {train_loss:.4f} "
                    f"Time: {epoch_time:.2f}s "
                    f"LR: {optimizer.lr:.6f}")
+        
+        global_step = epoch * len(train_loader) + batch_idx
+        wandb.log({
+            "skeleton epoch": epoch + 1,
+            "skeleton train_loss": train_loss,
+            "skeleton learning_rate": optimizer.lr if hasattr(optimizer, 'lr') else args.learning_rate
+        },step=global_step)
 
         # Validation phase
         if val_loader is not None and (epoch + 1) % args.val_freq == 0:
@@ -167,6 +177,12 @@ def train(args):
             J2J_loss /= len(val_loader)
             
             log_message(f"Validation Loss: {val_loss:.4f} J2J Loss: {J2J_loss:.4f}")
+
+            wandb.log({
+                "skeleton epoch": epoch + 1,
+                "skeleton val_loss": val_loss,
+                "skeleton J2J_loss": J2J_loss
+            },step=global_step)
             
             # Save best model
             if J2J_loss < best_loss:
@@ -185,7 +201,8 @@ def train(args):
     final_model_path = os.path.join(args.output_dir, 'final_model.pkl')
     model.save(final_model_path)
     log_message(f"Training completed. Saved final model to {final_model_path}")
-    
+
+    wandb.finish()
     return model, best_loss
 
 def main():

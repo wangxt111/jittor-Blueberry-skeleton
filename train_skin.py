@@ -15,6 +15,8 @@ from models.skin import create_model
 
 from dataset.exporter import Exporter
 
+import wandb
+
 # Set Jittor flags
 jt.flags.use_cuda = 1
 
@@ -25,6 +27,7 @@ def train(args):
     Args:
         args: Command line arguments
     """
+    wandb.init(project="jittor", name="baseline")
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
@@ -132,7 +135,15 @@ def train(args):
                    f"Train Loss l1: {train_loss_l1:.4f} "
                    f"Time: {epoch_time:.2f}s "
                    f"LR: {optimizer.lr:.6f}")
-
+        
+        global_step = epoch * len(train_loader) + batch_idx
+        wandb.log({
+            "skin epoch": epoch + 1,
+            "skin train_loss_mse": train_loss_mse,
+            "skin train_loss_l1": train_loss_l1,
+            "skin learning_rate": optimizer.lr if hasattr(optimizer, 'lr') else args.learning_rate
+        },step=global_step)
+        
         # Validation phase
         if val_loader is not None and (epoch + 1) % args.val_freq == 0:
             model.eval()
@@ -166,6 +177,11 @@ def train(args):
             val_loss_l1 /= len(val_loader)
             
             log_message(f"Validation Loss: mse: {val_loss_mse:.4f} l1: {val_loss_l1:.4f}")
+            wandb.log({
+                "skin epoch": epoch + 1,
+                "skin val_loss_mse": val_loss_mse,
+                "skin val_loss_l1": val_loss_l1
+            },step=global_step)
             
             # Save best model
             if val_loss_l1 < best_loss:
@@ -185,6 +201,7 @@ def train(args):
     model.save(final_model_path)
     log_message(f"Training completed. Saved final model to {final_model_path}")
     
+    wandb.finish()
     return model, best_loss
 
 def main():
