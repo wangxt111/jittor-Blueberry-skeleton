@@ -12,6 +12,7 @@ from dataset.dataset import get_dataloader, transform
 from dataset.sampler import SamplerMix
 from dataset.exporter import Exporter
 from models.skeleton import create_model
+from dataset.format import parents
 
 from models.metrics import J2J
 import wandb
@@ -108,7 +109,7 @@ def train(args):
 
             outputs = model(vertices)
             joints = joints.reshape(outputs.shape[0], -1)
-            loss = criterion(outputs, joints)
+            loss = criterion(outputs, joints, parents)
             
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -163,7 +164,6 @@ def train(args):
                 if batch_idx == show_id:
                     exporter = Exporter()
                     # export every joint's corresponding skinning
-                    from dataset.format import parents
                     exporter._render_skeleton(path=f"tmp/skeleton/epoch_{epoch}/skeleton_ref.png", joints=joints[0].numpy().reshape(-1, 3), parents=parents)
                     exporter._render_skeleton(path=f"tmp/skeleton/epoch_{epoch}/skeleton_pred.png", joints=outputs[0].numpy().reshape(-1, 3), parents=parents)
                     exporter._render_pc(path=f"tmp/skeleton/epoch_{epoch}/vertices.png", vertices=vertices[0].permute(1, 0).numpy())
