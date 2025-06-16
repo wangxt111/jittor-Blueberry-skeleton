@@ -8,11 +8,13 @@ Author: Xiaoyang Wu (original), converted by ChatGPT for Jittor
 import sys
 import math
 from functools import partial
-from addict import Dict
 from collections import OrderedDict
 
 import jittor as jt
 from jittor import nn
+import numpy as np
+import jsparse.nn as spnn
+from jittor.sparse import SparseTensor
 
 # 若有 DropPath 实现，请替换为 Jittor 版本；这里只提供简单占位
 class DropPath(nn.Module):
@@ -30,11 +32,11 @@ class DropPath(nn.Module):
         return x / keep_prob * random_tensor
 
 # encode 函数需从之前转换的 serialization 中导入
-from serialization import encode  # 确保这在 Jittor 版本中已定义
+from .serialization import encode
 
 @jt.no_grad()
 def offset2bincount(offset):
-    """返回 offset 中每个 batch 的元素数量（等价于 torch.diff + prepend）"""
+    """返回 offset 中每个 batch 的元素数量"""
     offset = offset.int32()
     diff = offset[1:] - offset[:-1]
     first = offset[0:1]
@@ -54,11 +56,6 @@ def batch2offset(batch):
     bincount = jt.unique(batch, return_counts=True)[1]
     return jt.cumsum(bincount, dim=0)
 
-
-
-import jittor as jt
-import numpy as np
-
 class Point(dict):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -66,19 +63,6 @@ class Point(dict):
             self["batch"] = self.offset2batch(self["offset"])
         elif "offset" not in self and "batch" in self:
             self["offset"] = self.batch2offset(self["batch"])
-
-    @staticmethod
-    def offset2batch(offset):
-        batch = []
-        for i in range(len(offset)):
-            count = offset[i] if i == 0 else offset[i] - offset[i - 1]
-            batch.extend([i] * count)
-        return jt.array(batch, dtype=jt.int32)
-
-    @staticmethod
-    def batch2offset(batch):
-        unique, counts = np.unique(batch.numpy(), return_counts=True)
-        return jt.cumsum(jt.Var(counts.tolist(), dtype=jt.int32), dim=0) - counts[0]
 
     def serialization(self, order="z", depth=None, shuffle_orders=False):
         assert "batch" in self
@@ -91,11 +75,13 @@ class Point(dict):
             depth = int(jt.max(self["grid_coord"]).item()).bit_length()
 
         self["serialized_depth"] = depth
+
+        assert depth * 3 + len(self.offset).bit_length() <= 63
         assert depth <= 16
 
-        code = []
-        for order_ in order:
-            code.append(self.encode(self["grid_coord"], self["batch"], depth, order_))
+        code = [
+            encode(self.grid_coord, self.batch, depth, order=order_) for order_ in order
+        ]
         code = jt.stack(code)  # (k, n)
         order_idx = jt.argsort(code, dim=1)
         inverse = jt.zeros_like(order_idx)
@@ -113,50 +99,45 @@ class Point(dict):
         self["serialized_inverse"] = inverse
 
     def sparsify(self, pad=96):
+        """
+        Convert Point data to Jittor SparseTensor format for sparse convolution.
+        
+        Relies on ["grid_coord" or "coord" + "grid_size", "batch", "feat"]
+        pad: padding size for sparse shape (optional, not directly used here but can be kept for compatibility).
+        """
+
         assert {"feat", "batch"}.issubset(self.keys())
-        if "grid_coord" not in self:
+
+        # 如果没有grid_coord，则计算grid_coord（离散坐标）
+        if "grid_coord" not in self.keys():
             assert {"grid_size", "coord"}.issubset(self.keys())
-            min_coord = jt.min(self["coord"], dim=0, keepdims=True)
-            self["grid_coord"] = ((self["coord"] - min_coord) / self["grid_size"]).floor().int32()
+            self["grid_coord"] = (self.coord - self.coord.min(0)[0]) // self.grid_size
+            self["grid_coord"] = self["grid_coord"].int()
 
-        if "sparse_shape" in self:
-            sparse_shape = self["sparse_shape"]
+        if "sparse_shape" in self.keys():
+            sparse_shape = self.sparse_shape
         else:
-            sparse_shape = jt.max(self["grid_coord"], dim=0)[0] + pad
+            sparse_shape = (jt.max(self.grid_coord, dim=0) + pad).tolist()
+        coords = jt.concat([self.batch.unsqueeze(-1).int(), self.grid_coord.int()], dim=1)
+
+        sparse_tensor = SparseTensor(
+            values=self.feat,
+            indices=coords,
+            voxel_size=self.grid_size,
+            quantize=True,
+        )
+
         self["sparse_shape"] = sparse_shape
-
-        # Sparse conv feature构建（若有 spconv 可考虑兼容）
-        self["sparse_conv_feat"] = {
-            "features": self["feat"],
-            "indices": jt.concat([self["batch"].unsqueeze(1), self["grid_coord"]], dim=1),
-            "spatial_shape": sparse_shape,
-            "batch_size": int(self["batch"][-1].item()) + 1,
-        }
-
-    @staticmethod
-    def encode(grid_coord, batch, depth, order="z"):
-        # 这里只给出z-order简单实现，如果需要支持完整 Morton 编码，需补充详细实现
-        assert order == "z"
-        code = grid_coord[:, 0].int64()
-        for d in range(1, grid_coord.shape[1]):
-            code = (code << depth) | grid_coord[:, d].int64()
-        code = (batch.int64() << (depth * 3)) | code
-        return code
-
-
-
-import jittor as jt
-import jittor.nn as nn
+        self["sparse_tensor"] = sparse_tensor
 
 class PointModule(nn.Module):
-    r"""PointModule
+    """
+    PointModule
     Placeholder base class — all module subclasses will take Point dict as input
     and be used in PointSequential.
     """
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-
 
 class PointSequential(PointModule):
     """

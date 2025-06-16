@@ -17,6 +17,13 @@ import torch_scatter
 from timm.models.layers import DropPath
 from collections import OrderedDict
 
+import jittor as jt
+from jittor import nn
+from jittor import init
+from jittor.contrib import concat
+import numpy as np
+import sys
+
 try:
     import flash_attn
 except ImportError:
