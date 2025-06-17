@@ -27,7 +27,9 @@ def train(args):
     Args:
         args: Command line arguments
     """
+    wandb.login(key="")
     wandb.init(project="jittor", name="baseline")
+
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)

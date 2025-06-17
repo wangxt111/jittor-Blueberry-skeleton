@@ -29,10 +29,8 @@ symmetric_pairs = [
     (14,18),
     (15,19),
     (16,20),
-    (21,17),
+    (17,21),
 ]
-
-import jittor as jt
 
 def reflect_points(points, axis):
     """
@@ -75,11 +73,10 @@ def find_reflection_axis(target, pairs):
     # 用SVD求解最优反射轴：
     # 反射轴是使得diff投影最小的方向（最小奇异值对应的方向）
     # 计算协方差矩阵
-    cov = jt.matmul(diff.transpose(1,0), diff)  # (3,3)
-    _, _, vh = jt.svd(cov)  # vh: (3,3)
-    axis = vh[-1]  # 对应最小奇异值的奇异向量
+    cov = jt.matmul(diff.transpose(1, 0), diff)  # (3,3)
+    eigvals, eigvecs = jt.linalg.eigh(cov)  # eigvecs: (3,3), eigvals: (3,)
+    axis = eigvecs[:, 0]
 
-    # 保证单位化
     axis = axis / jt.norm(axis)
     return axis
 
@@ -103,9 +100,10 @@ def symmetry_loss(pred, target, pairs=None):
 
 def topology_loss(pred, target, parents):
     """保持父子节点之间的相对向量结构一致"""
+    # print("parents", parents)
     loss = 0.0
     for i, p in enumerate(parents):
-        if p < 0: continue
+        if p == None: continue
         pred_vec = pred[:, i, :] - pred[:, p, :]
         target_vec = target[:, i, :] - target[:, p, :]
         loss += jt.norm(pred_vec - target_vec, dim=-1).mean()
@@ -126,7 +124,8 @@ def train(args):
     Args:
         args: Command line arguments
     """
-    wandb.init(project="jittor", name="baseline")
+    wandb.login(key="")
+    wandb.init(project="jittor", name="loss",mode="offline")
 
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
