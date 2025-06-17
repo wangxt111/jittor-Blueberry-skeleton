@@ -6,7 +6,7 @@ import numpy as np
 import sys
 
 # Import the PCT model components
-from PCT.networks.cls.pct import Point_Transformer, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group
+from PCT.networks.cls.pct import Point_Transformer, Point_Transformer_Big, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group
 
 class SimpleSkeletonModel(nn.Module):
     

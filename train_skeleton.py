@@ -4,51 +4,49 @@ import os
 import argparse
 import time
 import random
+import copy # Import copy for deepcopy
 
 from jittor import nn
 from jittor import optim
 
-from dataset.dataset import get_dataloader, transform
-from dataset.sampler import SamplerMix
-from dataset.exporter import Exporter
-from models.skeleton import create_model
-from dataset.format import parents
+from dataset.dataset import get_dataloader, transform # Assuming these are correctly defined elsewhere
+from dataset.sampler import SamplerMix # Assuming this is correctly defined elsewhere
+from dataset.exporter import Exporter # Assuming this is correctly defined elsewhere
+from models.skeleton import create_model # Assuming this is correctly defined elsewhere
+from dataset.format import parents # Assuming this is correctly defined elsewhere
 
-from models.metrics import J2J
+from models.metrics import J2J # Assuming this is correctly defined elsewhere
 import wandb
+from scipy.spatial.transform import Rotation # Import Rotation for 3D transformations
 
 # Set Jittor flags
 jt.flags.use_cuda = 1
 
 # 对称关节对列表（左右对称的关节索引）
 symmetric_pairs = [
-    (9,13),
-    (8,12),
-    (7,11),
-    (6,10),
-    (14,18),
-    (15,19),
-    (16,20),
-    (17,21),
+    (9,13), (8,12), (7,11), (6,10),
+    (14,18), (15,19), (16,20), (17,21),
 ]
+
+# --- 辅助函数 (保持不变，或根据需要转换为Jittor Tensor操作) ---
+# 注意: reflect_across_plane 和 find_reflaection_plane_colomna 需要处理 Jittor Tensor
 
 def reflect_across_plane(points, plane_point, plane_normal):
     """
     将点 points 绕平面 (plane_point, plane_normal) 做反射。
-    points: (B, 3)
-    plane_point: (B, 3)
-    plane_normal: (B, 3)
+    points: Jittor tensor (B, N, 3)
+    plane_point: Jittor tensor (B, 3)
+    plane_normal: Jittor tensor (B, 3)
     """
-    vec = points - plane_point         # (B, 3)
-    proj = (vec * plane_normal).sum(dim=-1, keepdims=True)  # (B,1)
-    reflected = points - 2 * proj * plane_normal            # (B,3)
+    vec = points - plane_point.unsqueeze(1) # (B, N, 3) - (B, 1, 3)
+    proj = (vec * plane_normal.unsqueeze(1)).sum(dim=-1, keepdims=True)  # (B, N, 1)
+    reflected = points - 2 * proj * plane_normal.unsqueeze(1) # (B, N, 3)
     return reflected
 
-def find_reflaection_plane_colomna(target, pairs):
+def find_reflaection_plane_colomna(target, pairs=None): # pairs is not used inside but kept for compatibility
     """
     通过脊柱节点(0,1,2,3,4,5)计算人体的对称平面
-    target: (B, N, 3) 关节点坐标
-    pairs: 对称点对列表
+    target: Jittor tensor (B, N, 3) 关节点坐标
     返回：c (B, 3), n (B, 3) 表示过点c、法向量为n的对称平面
     """
     # 获取脊柱节点
@@ -61,60 +59,91 @@ def find_reflaection_plane_colomna(target, pairs):
     spine_start = spine_nodes[:, 0, :]  # (B, 3)
     spine_end = spine_nodes[:, -1, :]   # (B, 3)
     spine_dir = spine_end - spine_start  # (B, 3)
-    spine_dir = spine_dir / (jt.norm(spine_dir, dim=-1, keepdims=True) + 1e-6)
+    # 避免除以零
+    spine_dir_norm = jt.norm(spine_dir, dim=-1, keepdims=True)
+    spine_dir = spine_dir / (spine_dir_norm + 1e-6)
     
     # 3. 计算垂直于脊柱方向的向量作为平面法向量
     # 使用脊柱节点拟合一个平面
     spine_centered = spine_nodes - c.unsqueeze(1)  # (B, 6, 3)
     
-    # 计算协方差矩阵
-    cov = jt.matmul(spine_centered.transpose(1, 2), spine_centered)  # (B, 3, 3)
+    # 计算协方差矩阵 (Jittor的batch matmul)
+    # (B, 3, 6) @ (B, 6, 3) -> (B, 3, 3)
+    cov = jt.matmul(spine_centered.permute(0, 2, 1), spine_centered) 
     
-    # 计算特征值和特征向量
-    # 使用SVD分解
+    # 计算特征值和特征向量 (Jittor的SVD支持batch)
     U, S, V = jt.linalg.svd(cov)
     
     # 取最小特征值对应的特征向量作为平面法向量
     n = U[:, :, -1]  # (B, 3)
     
-    # 确保法向量与脊柱方向垂直
+    # 确保法向量方向一致性：如果法向量与脊柱方向点积为负，则反转法向量
     dot_product = (n * spine_dir).sum(dim=-1, keepdims=True)
-    n = jt.where(dot_product > 0, -n, n)
+    n = jt.where(dot_product < 0, -n, n) 
     
     # 单位化法向量
-    n = n / (jt.norm(n, dim=-1, keepdims=True) + 1e-6)
+    n_norm = jt.norm(n, dim=-1, keepdims=True)
+    n = n / (n_norm + 1e-6)
     
     return c, n
 
-def symmetry_loss(pred, target, pairs=None):
+def symmetry_loss(pred, target, pairs):
     """
     每个样本独立推断对称平面，根据反射点计算对称损失
+    pred: (B, J, 3)
+    target: (B, J, 3)
+    pairs: 对称点对列表
     """
-    if pairs is None:
+    if pairs is None or len(pairs) == 0:
         return jt.zeros(1)
 
-    B = pred.shape[0]
     plane_c, plane_n = find_reflaection_plane_colomna(target, pairs)  # (B, 3), (B, 3)
-    loss = 0.0
+    loss = jt.zeros(1) # Initialize loss as Jittor tensor
 
-    for left, right in pairs:
-        left_joint = pred[:, left, :]         # (B, 3)
-        right_joint = pred[:, right, :]       # (B, 3)
-        right_mirrored = reflect_across_plane(right_joint, plane_c, plane_n)  # (B, 3)
-        loss += jt.norm(left_joint - right_mirrored, dim=-1).mean()
+    for left_idx, right_idx in pairs:
+        left_joint_pred = pred[:, left_idx, :]         # (B, 3)
+        right_joint_pred = pred[:, right_idx, :]       # (B, 3)
+        
+        # 反射预测的右关节
+        right_mirrored_pred = reflect_across_plane(right_joint_pred.unsqueeze(1), plane_c, plane_n).squeeze(1) # (B, 3)
+        
+        # 计算对称损失
+        loss += jt.norm(left_joint_pred - right_mirrored_pred, dim=-1).mean()
 
     return loss / len(pairs)
 
 def topology_loss(pred, target, parents):
     """保持父子节点之间的相对向量结构一致"""
-    # print("parents", parents)
-    loss = 0.0
+    loss = jt.zeros(1) # Initialize loss as Jittor tensor
     for i, p in enumerate(parents):
-        if p == None: continue
+        if p is None: continue # Use 'is None' for None check
         pred_vec = pred[:, i, :] - pred[:, p, :]
         target_vec = target[:, i, :] - target[:, p, :]
         loss += jt.norm(pred_vec - target_vec, dim=-1).mean()
     return loss
+
+def chamfer_distance_jittor(set_a, set_b):
+    """
+    计算两个点集之间的Chamfer Distance。
+    set_a: Jittor tensor (B, N, 3) 或 (B, J, 3)
+    set_b: Jittor tensor (B, M, 3) 或 (B, J, 3)
+
+    返回: Jittor tensor (scalar) - 批次平均的 Chamfer Distance (平方距离)。
+    """
+    # 计算 set_a 中每个点到 set_b 中所有点的平方欧氏距离
+    dist_ab_sq = jt.sum((set_a.unsqueeze(2) - set_b.unsqueeze(1))**2, dim=-1) # (B, N, M)
+
+    # 找到 set_a 中每个点到 set_b 中最近点的平方距离
+    dist_a_to_b_sq = dist_ab_sq.min(dim=-1, keepdims=False) # (B, N)
+
+    # 计算 set_b 中每个点到 set_a 中所有点的平方欧氏距离
+    dist_ba_sq = jt.sum((set_b.unsqueeze(2) - set_a.unsqueeze(1))**2, dim=-1) # (B, M, N)
+    # 找到 set_b 中每个点到 set_a 中最近点的平方距离
+    dist_b_to_a_sq = dist_ba_sq.min(dim=-1, keepdims=False) # (B, M)
+
+    # Chamfer Distance 是两个方向的平均
+    cd_sq_per_sample = dist_a_to_b_sq.mean(dim=-1) + dist_b_to_a_sq.mean(dim=-1) # (B,)
+    return cd_sq_per_sample.mean() # 返回批次平均的平方Chamfer Distance
 
 def relative_position_loss(pred, target):
     """保持骨骼中心和相对位置一致性"""
@@ -124,6 +153,119 @@ def relative_position_loss(pred, target):
     target_rel = target - target_center
     return jt.norm(pred_rel - target_rel, dim=-1).mean()
 
+# --- 数据增强函数 (操作 NumPy 数组) ---
+
+def np_random_rotate_3d(vertices, joints, max_angle=30):
+    """
+    随机旋转3D模型 (NumPy版本)
+    Args:
+        vertices: 顶点坐标 (N, 3)
+        joints: 骨骼节点位置 (J, 3)
+        max_angle: 最大旋转角度（度）
+    Returns:
+        旋转后的顶点、骨骼
+    """
+    angles = np.random.uniform(-max_angle, max_angle, 3)
+    R = Rotation.from_euler('xyz', angles, degrees=True)
+    
+    rotated_vertices = R.apply(vertices)
+    rotated_joints = R.apply(joints)
+    
+    return rotated_vertices, rotated_joints
+
+def np_random_scale(vertices, joints, scale_range=(0.9, 1.1)):
+    """
+    随机缩放3D模型 (NumPy版本)
+    Args:
+        vertices: 顶点坐标 (N, 3)
+        joints: 骨骼节点位置 (J, 3)
+        scale_range: 缩放范围
+    Returns:
+        缩放后的顶点、骨骼
+    """
+    scale = np.random.uniform(scale_range[0], scale_range[1])
+    
+    scaled_vertices = vertices * scale
+    scaled_joints = joints * scale
+    
+    return scaled_vertices, scaled_joints
+
+def np_add_gaussian_noise(vertices, noise_std=0.01):
+    """
+    添加高斯噪声到顶点 (NumPy版本)
+    Args:
+        vertices: 顶点坐标 (N, 3)
+        noise_std: 噪声标准差
+    Returns:
+        添加噪声后的顶点
+    """
+    noise = np.random.normal(0, noise_std, vertices.shape)
+    return vertices + noise
+
+def np_random_joint_perturbation(joints, max_offset=0.02):
+    """
+    随机扰动骨骼节点位置 (NumPy版本)
+    Args:
+        joints: 骨骼节点位置 (J, 3)
+        max_offset: 最大偏移量
+    Returns:
+        扰动后的骨骼节点
+    """
+    offset = np.random.uniform(-max_offset, max_offset, joints.shape)
+    return joints + offset
+
+# --- 批处理数据增强函数 (在 Jittor 与 NumPy 之间转换) ---
+
+def augment_data_for_batch(vertices_batch_jt, joints_batch_jt, 
+                           rotate=True, scale=True, add_noise=True, perturb_joints=True,
+                           max_angle=30, scale_range=(0.9, 1.1), noise_std=0.01, max_offset=0.02):
+    """
+    对一个批次的 Jittor Tensor 数据进行实时增强。
+    Args:
+        vertices_batch_jt: Jittor Tensor, 顶点数据 (B, N, 3)
+        joints_batch_jt: Jittor Tensor, 骨骼节点数据 (B, J, 3)
+        ... (增强参数)
+    Returns:
+        augmented_vertices_batch_jt: Jittor Tensor, 增强后的顶点数据 (B, N, 3)
+        augmented_joints_batch_jt: Jittor Tensor, 增强后的骨骼节点数据 (B, J, 3)
+    """
+    augmented_vertices_list = []
+    augmented_joints_list = []
+
+    # 将 Jittor Tensor 转换为 NumPy 数组进行操作
+    vertices_batch_np = vertices_batch_jt.numpy()
+    joints_batch_np = joints_batch_jt.numpy()
+
+    for i in range(vertices_batch_np.shape[0]): # 遍历批次中的每个样本
+        current_vertices = vertices_batch_np[i].copy() # 确保操作的是副本
+        current_joints = joints_batch_np[i].copy()
+
+        if rotate:
+            current_vertices, current_joints = \
+                np_random_rotate_3d(current_vertices, current_joints, max_angle=max_angle)
+        
+        if scale:
+            current_vertices, current_joints = \
+                np_random_scale(current_vertices, current_joints, scale_range=scale_range)
+        
+        if add_noise:
+            current_vertices = np_add_gaussian_noise(current_vertices, noise_std=noise_std)
+        
+        if perturb_joints:
+            current_joints = np_random_joint_perturbation(current_joints, max_offset=max_offset)
+        
+        augmented_vertices_list.append(current_vertices)
+        augmented_joints_list.append(current_joints)
+    
+    # 将增强后的 NumPy 数组列表转换回 Jittor Tensor
+    augmented_vertices_batch_jt = jt.array(np.stack(augmented_vertices_list))
+    augmented_joints_batch_jt = jt.array(np.stack(augmented_joints_list))
+
+    return augmented_vertices_batch_jt, augmented_joints_batch_jt
+
+
+# --- 训练函数 (修改以包含实时数据增强) ---
+
 def train(args):
     """
     Main training function
@@ -131,8 +273,8 @@ def train(args):
     Args:
         args: Command line arguments
     """
-    wandb.login(key="")
-    wandb.init(project="jittor", name="loss",mode="offline")
+    wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
+    wandb.init(project="jittor", name="base + J2Jloss + epochdata")
 
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -208,16 +350,30 @@ def train(args):
         start_time = time.time()
         for batch_idx, data in enumerate(train_loader):
             # Get data and labels
-            vertices, joints = data['vertices'], data['joints']
+            original_vertices, original_joints = data['vertices'], data['joints']
+            
+            # --- 实时数据增强 ---
+            # 仅对训练数据进行增强
+            augmented_vertices, augmented_joints = augment_data_for_batch(
+                original_vertices, 
+                original_joints,
+                rotate=True,         # 根据 args 控制是否启用
+                scale=True,          # 根据 args 控制是否启用
+                add_noise=True,      # 根据 args 控制是否启用
+                perturb_joints=True, # 根据 args 控制是否启用
+                max_angle=args.aug_max_angle, # 从命令行参数获取
+                scale_range=(args.aug_scale_min, args.aug_scale_max), # 从命令行参数获取
+                noise_std=args.aug_noise_std, # 从命令行参数获取
+                max_offset=args.aug_max_offset # 从命令行参数获取
+            )
 
-            vertices = vertices.permute(0, 2, 1)  # [B, 3, N]
+            # 使用增强后的数据作为模型输入和 GT
+            vertices = augmented_vertices.permute(0, 2, 1)  # [B, 3, N] for model input
+            joints_gt = augmented_joints.reshape(-1, 22, 3) # [B, J, 3] for GT
 
             outputs = model(vertices)
-            # joints = joints.reshape(outputs.shape[0], -1)
-            # loss = criterion(outputs, joints, parents)
-
+            
             joints_pred = outputs.reshape(-1, 22, 3)
-            joints_gt = joints.reshape(-1, 22, 3)
 
             # 基础 MSE loss
             loss_pos = criterion(joints_pred, joints_gt)
@@ -230,8 +386,12 @@ def train(args):
 
             # 对称性损失
             loss_sym = symmetry_loss(joints_pred, joints_gt, pairs=symmetric_pairs)
-            
-            loss = loss_pos + 0.2 * loss_topo + 0.2 * loss_rel + 0.5 * loss_sym
+
+            # loss_cd = chamfer_distance_jittor(joints_pred, joints_gt)
+            # loss_J2J += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
+
+            loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
+            loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
             
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -248,7 +408,8 @@ def train(args):
                            f"Pos Loss: {loss_pos.item():.4f} "
                            f"Topo Loss: {loss_topo.item():.4f} "
                            f"Rel Loss: {loss_rel.item():.4f} "
-                           f"Sym Loss: {loss_sym.item():.4f}")
+                           f"Sym Loss: {loss_sym.item():.4f}"
+                           f"J2J Loss: {loss_J2J.item():.6f}")# 新增 CD Loss
         
         # Calculate epoch statistics
         train_loss /= len(train_loader)
@@ -257,12 +418,12 @@ def train(args):
         log_message(f"Epoch [{epoch+1}/{args.epochs}] "
                    f"Train Loss: {train_loss:.4f} "
                    f"Time: {epoch_time:.2f}s "
-                   f"LR: {optimizer.lr:.6f}")
+                   f"LR: {optimizer.lr:.6f}") 
         
         global_step = epoch * len(train_loader) + batch_idx
         wandb.log({
             "skeleton epoch": epoch + 1,
-            "skeleton total_loss": loss.item(),
+            "skeleton total_loss": train_loss,
             "skeleton pos_loss": loss_pos.item(),
             "skeleton topo_loss": loss_topo.item(),
             "skeleton rel_loss": loss_rel.item(),
@@ -270,7 +431,7 @@ def train(args):
             "skeleton learning_rate": optimizer.lr if hasattr(optimizer, 'lr') else args.learning_rate
         }, step=global_step)
 
-        # Validation phase
+        # Validation phase (No augmentation applied here)
         if val_loader is not None and (epoch + 1) % args.val_freq == 0:
             model.eval()
             val_loss = 0.0
@@ -278,7 +439,7 @@ def train(args):
             
             show_id = np.random.randint(0, len(val_loader))
             for batch_idx, data in enumerate(val_loader):
-                # Get data and labels
+                # Get data and labels (no augmentation for validation)
                 vertices, joints = data['vertices'], data['joints']
                 joints = joints.reshape(joints.shape[0], -1)
                 
@@ -371,6 +532,29 @@ def main():
                         help='Weight decay (L2 penalty)')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='Momentum for SGD optimizer')
+
+    # Loss weights
+    parser.add_argument('--lambda_topo', type=float, default=0.0,
+                        help='Weight for topology loss')
+    parser.add_argument('--lambda_rel', type=float, default=0.0,
+                        help='Weight for relative position loss')
+    parser.add_argument('--lambda_sym', type=float, default=0.0,
+                        help='Weight for symmetry loss')
+    parser.add_argument('--lambda_cd', type=float, default=0.8,
+                        help='Weight for J2J loss')
+
+    # --- Data Augmentation Parameters ---
+    parser.add_argument('--aug_max_angle', type=float, default=30.0,
+                        help='Max rotation angle in degrees for augmentation')
+    parser.add_argument('--aug_scale_min', type=float, default=0.9,
+                        help='Min scale factor for augmentation')
+    parser.add_argument('--aug_scale_max', type=float, default=1.1,
+                        help='Max scale factor for augmentation')
+    parser.add_argument('--aug_noise_std', type=float, default=0.01,
+                        help='Standard deviation for Gaussian noise augmentation')
+    parser.add_argument('--aug_max_offset', type=float, default=0.02,
+                        help='Max offset for joint perturbation augmentation')
+    
     from datetime import datetime
     import os
 
@@ -380,7 +564,6 @@ def main():
     # Output parameters
     parser.add_argument('--output_dir', type=str, default=default_output_dir,
                         help='Directory to save output files')
-    os.makedirs(args.output_dir, exist_ok=True)
     parser.add_argument('--print_freq', type=int, default=10,
                         help='Print frequency')
     parser.add_argument('--save_freq', type=int, default=10,

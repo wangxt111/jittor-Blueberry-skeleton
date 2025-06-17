@@ -1,25 +1,19 @@
 import numpy as np
 import random
 from scipy.spatial.transform import Rotation
+import os # 导入os模块用于文件路径操作
 
 def load_npz_data(file_path):
     """
-    加载npz格式的3D人体模型数据
+    加载npz格式的3D人体模型数据，并返回一个包含所有键值对的字典。
     Args:
         file_path: npz文件路径
     Returns:
-        vertices: 顶点坐标 (N, 3)
-        faces: 面片索引 (M, 3)
-        joints: 骨骼节点位置 (J, 3)
-        skin: 蒙皮权重 (N, J)
-        parents: 骨骼层级关系 (J,)
-        names: 骨骼名称 (J,)
-        matrix_local: 局部变换矩阵 (J, 4, 4)
+        data_dict: 包含所有键值对的字典
     """
     data = np.load(file_path, allow_pickle=True)
-    return (data['vertices'], data['faces'], data['joints'], 
-            data['skin'], data['parents'], data['names'], 
-            data['matrix_local'])
+    data_dict = {key: data[key] for key in data.keys()}
+    return data_dict
 
 def random_rotate_3d(vertices, joints, matrix_local, max_angle=30):
     """
@@ -94,38 +88,34 @@ def random_joint_perturbation(joints, max_offset=0.02):
     offset = np.random.uniform(-max_offset, max_offset, joints.shape)
     return joints + offset
 
-def augment_3d_model(vertices, faces, joints, skin, parents, names, matrix_local,
-                     rotate=True, scale=True, add_noise=True, perturb_joints=True):
+def augment_3d_model(data_dict, rotate=True, scale=True, add_noise=False, perturb_joints=False):
     """
     综合3D模型数据增强函数
     Args:
-        vertices: 顶点坐标 (N, 3)
-        faces: 面片索引 (M, 3)
-        joints: 骨骼节点位置 (J, 3)
-        skin: 蒙皮权重 (N, J)
-        parents: 骨骼层级关系 (J,)
-        names: 骨骼名称 (J,)
-        matrix_local: 局部变换矩阵 (J, 4, 4)
+        data_dict: 包含所有原始数据键值对的字典
         rotate: 是否进行旋转
         scale: 是否进行缩放
         add_noise: 是否添加噪声
         perturb_joints: 是否扰动骨骼节点
     Returns:
-        增强后的数据
+        增强后的数据字典
     """
+    # 对需要增强的数据进行操作，并更新字典中的对应值
     if rotate:
-        vertices, joints, matrix_local = random_rotate_3d(vertices, joints, matrix_local)
+        data_dict['vertices'], data_dict['joints'], data_dict['matrix_local'] = \
+            random_rotate_3d(data_dict['vertices'], data_dict['joints'], data_dict['matrix_local'])
     
     if scale:
-        vertices, joints, matrix_local = random_scale(vertices, joints, matrix_local)
+        data_dict['vertices'], data_dict['joints'], data_dict['matrix_local'] = \
+            random_scale(data_dict['vertices'], data_dict['joints'], data_dict['matrix_local'])
     
     if add_noise:
-        vertices = add_gaussian_noise(vertices)
+        data_dict['vertices'] = add_gaussian_noise(data_dict['vertices'])
     
     if perturb_joints:
-        joints = random_joint_perturbation(joints)
+        data_dict['joints'] = random_joint_perturbation(data_dict['joints'])
     
-    return vertices, faces, joints, skin, parents, names, matrix_local
+    return data_dict # 返回整个修改后的字典
 
 def process_dataset(data_dir, output_dir, is_train=True):
     """
@@ -135,28 +125,23 @@ def process_dataset(data_dir, output_dir, is_train=True):
         output_dir: 输出数据目录
         is_train: 是否为训练集
     """
-    import os
     os.makedirs(output_dir, exist_ok=True)
     
     for file_name in os.listdir(data_dir):
         if file_name.endswith('.npz'):
-            # 加载数据
+            # 加载数据，现在load_npz_data返回一个字典
             file_path = os.path.join(data_dir, file_name)
-            vertices, faces, joints, skin, parents, names, matrix_local = load_npz_data(file_path)
+            original_data_dict = load_npz_data(file_path)
             
-            # 数据增强
+            # 保存原始数据
+            output_path_original = os.path.join(output_dir, file_name)
+            np.savez(output_path_original, **original_data_dict)
+            
+            # 如果是训练集，进行数据增强并保存增强后的数据
             if is_train:
-                vertices, faces, joints, skin, parents, names, matrix_local = augment_3d_model(
-                    vertices, faces, joints, skin, parents, names, matrix_local
-                )
-            
-            # 保存增强后的数据
-            output_path = os.path.join(output_dir, file_name)
-            np.savez(output_path,
-                    vertices=vertices,
-                    faces=faces,
-                    joints=joints,
-                    skin=skin,
-                    parents=parents,
-                    names=names,
-                    matrix_local=matrix_local)
+                augmented_data_dict = augment_3d_model(original_data_dict)
+                # 构建增强文件的名称
+                base_name, ext = os.path.splitext(file_name)
+                augmented_file_name = f"{base_name}_aug{ext}"
+                output_path_augmented = os.path.join(output_dir, augmented_file_name)
+                np.savez(output_path_augmented, **augmented_data_dict) 
