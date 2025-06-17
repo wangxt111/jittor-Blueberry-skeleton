@@ -196,3 +196,5 @@ newdata
 
 wandb
 *.slurm
+
+.DS_Store
