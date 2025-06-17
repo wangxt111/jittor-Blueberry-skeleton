@@ -15,10 +15,7 @@ def load_and_print_npz(file_path):
 
         # 获取顶点数据
         vertices = data['vertices']
-        joints = data['joints']
-        skin = data['skin']  # 获取蒙皮权重
-        names = data['names']  # 获取骨骼名称
-
+        
         # 创建一个3D图形
         fig = plt.figure(figsize=(10, 10))
         ax = fig.add_subplot(111, projection='3d')
@@ -27,14 +24,27 @@ def load_and_print_npz(file_path):
         ax.scatter(vertices[:, 0], vertices[:, 1], vertices[:, 2], 
                   c='blue', marker='.', s=1, alpha=0.1, label='Vertices')
         
-        # 绘制骨骼节点
-        ax.scatter(joints[:, 0], joints[:, 1], joints[:, 2], 
-                  c='red', marker='o', s=50, label='Joints')
-
-        # 在每个骨骼节点旁边标注编号和名称
-        for idx, (joint, name) in enumerate(zip(joints, names)):
-            ax.text(joint[0], joint[1], joint[2], f"{idx}\n{name}", 
-                   color='black', fontsize=8)
+        # 尝试绘制骨骼节点（如果存在）
+        try:
+            joints = data['joints']
+            if joints.size > 0:  # 检查是否为空数组
+                if joints.ndim == 2:  # 如果是2维数组
+                    ax.scatter(joints[:, 0], joints[:, 1], joints[:, 2], 
+                             c='red', marker='o', s=50, label='Joints')
+                    
+                    # 尝试添加骨骼名称标注
+                    try:
+                        names = data['names']
+                        for idx, (joint, name) in enumerate(zip(joints, names)):
+                            ax.text(joint[0], joint[1], joint[2], f"{idx}\n{name}", 
+                                   color='black', fontsize=8)
+                    except:
+                        # 如果没有名称，只显示编号
+                        for idx, joint in enumerate(joints):
+                            ax.text(joint[0], joint[1], joint[2], str(idx), 
+                                   color='black', fontsize=8)
+        except:
+            print("Warning: 无法加载或显示骨骼节点数据")
 
         # 设置图形标题和坐标轴标签
         ax.set_title('3D Model Visualization')
@@ -52,7 +62,7 @@ def load_and_print_npz(file_path):
         plt.show()
 
 # 替换为你的.npz文件路径
-npz_file_path = 'newdata/train/mixamo/0.npz'
+npz_file_path = 'data/test/mixamo/3172.npz'
 print(npz_file_path)
 load_and_print_npz(npz_file_path)
 

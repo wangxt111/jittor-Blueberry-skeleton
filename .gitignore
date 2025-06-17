@@ -192,6 +192,7 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 data
+newdata
 
 wandb
 *.slurm
