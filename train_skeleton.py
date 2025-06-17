@@ -266,7 +266,7 @@ def augment_data_for_batch(vertices_batch_jt, joints_batch_jt,
 
 # --- 训练函数 (修改以包含实时数据增强) ---
 
-def train(args):
+def train(args,name):
     """
     Main training function
     
@@ -274,7 +274,7 @@ def train(args):
         args: Command line arguments
     """
     wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
-    wandb.init(project="jittor", name="base + J2Jloss + epochdata")
+    wandb.init(project="jittor", name=name)
 
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -368,9 +368,13 @@ def train(args):
             )
 
             # 使用增强后的数据作为模型输入和 GT
-            vertices = augmented_vertices.permute(0, 2, 1)  # [B, 3, N] for model input
-            joints_gt = augmented_joints.reshape(-1, 22, 3) # [B, J, 3] for GT
+            # vertices = augmented_vertices.permute(0, 2, 1)  # [B, 3, N] for model input
+            # joints_gt = augmented_joints.reshape(-1, 22, 3) # [B, J, 3] for GT
 
+            #不使用每一轮
+            vertices = original_vertices.permute(0, 2, 1)
+            joints_gt = original_joints.reshape(-1, 22, 3)
+            
             outputs = model(vertices)
             
             joints_pred = outputs.reshape(-1, 22, 3)
@@ -409,7 +413,7 @@ def train(args):
                            f"Topo Loss: {loss_topo.item():.4f} "
                            f"Rel Loss: {loss_rel.item():.4f} "
                            f"Sym Loss: {loss_sym.item():.4f}"
-                           f"J2J Loss: {loss_J2J.item():.6f}")# 新增 CD Loss
+                           f"J2J Loss: {loss_J2J:.6f}")# 新增 CD Loss
         
         # Calculate epoch statistics
         train_loss /= len(train_loader)
@@ -558,8 +562,8 @@ def main():
     from datetime import datetime
     import os
 
-    now = datetime.now().strftime("%Y%m%d_%H%M%S") 
-    default_output_dir = os.path.join('output', now, 'skeleton')
+    name = "base + J2Jloss + no_epochdata"
+    default_output_dir = os.path.join('output', name, 'skeleton')
 
     # Output parameters
     parser.add_argument('--output_dir', type=str, default=default_output_dir,
@@ -574,7 +578,7 @@ def main():
     args = parser.parse_args()
     
     # Start training
-    train(args)
+    train(args,name=name)
 
 def seed_all(seed):
     jt.set_global_seed(seed)
