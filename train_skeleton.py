@@ -32,69 +32,52 @@ symmetric_pairs = [
     (17,21),
 ]
 
+# 对称关节对列表（左右对称的关节索引）
 def reflect_points(points, axis):
     """
     对points绕axis轴做反射变换。
     points: (B, 3)
-    axis: (3,) 单位向量
+    axis: (B, 3) 每个样本一个单位向量
     返回: 反射后的points (B,3)
-    反射公式: p' = p - 2 * n * (n^T p)
     """
-    # axis是单位向量 (3,)
-    proj = jt.matmul(points, axis.reshape(3,1))  # (B,1)
+    proj = (points * axis).sum(dim=-1, keepdims=True)  # (B,1)
     reflected = points - 2 * proj * axis  # (B,3)
     return reflected
 
 def find_reflection_axis(target, pairs):
     """
-    计算最优反射轴
-    target: (B, N, 3) 真实关节
-    pairs: 左右对称关节索引对列表
-    返回：单位向量axis (3,)
+    target: (B, N, 3)
+    pairs: 对称点索引对
+    返回: axis (B, 3)
     """
     B = target.shape[0]
-    left_pts = []
-    right_pts = []
+    diffs = []
+
     for left, right in pairs:
-        left_pts.append(target[:, left, :])    # (B,3)
-        right_pts.append(target[:, right, :])  # (B,3)
-    left_pts = jt.stack(left_pts, dim=1)  # (B, num_pairs, 3)
-    right_pts = jt.stack(right_pts, dim=1)  # (B, num_pairs, 3)
+        L = target[:, left, :]  # (B, 3)
+        R = target[:, right, :] # (B, 3)
+        diff = R - L            # 差向量
+        diffs.append(diff)
 
-    # 中心化
-    mean_pts = (left_pts + right_pts) / 2  # 对称中心 (B, num_pairs, 3)
-    left_centered = left_pts - mean_pts
-    right_centered = right_pts - mean_pts
-
-    # 计算左右差向量平均
-    diff = left_centered + right_centered  # 反射性质：p_left = R(p_right), R为反射矩阵
-    diff = diff.reshape(-1, 3)  # (B*num_pairs, 3)
-
-    # 用SVD求解最优反射轴：
-    # 反射轴是使得diff投影最小的方向（最小奇异值对应的方向）
-    # 计算协方差矩阵
-    cov = jt.matmul(diff.transpose(1, 0), diff)  # (3,3)
-    eigvals, eigvecs = jt.linalg.eigh(cov)  # eigvecs: (3,3), eigvals: (3,)
-    axis = eigvecs[:, 0]
-
-    axis = axis / jt.norm(axis)
+    diffs = jt.stack(diffs, dim=1)  # (B, num_pairs, 3)
+    axis = diffs.mean(dim=1)        # (B, 3) 平均方向
+    axis = axis / (jt.norm(axis, dim=-1, keepdims=True) + 1e-6)  # 单位向量
     return axis
 
 def symmetry_loss(pred, target, pairs=None):
     """
-    通过target自动推断反射轴，计算pred对称损失
+    每个样本独立推断反射轴，计算pred对称损失
     """
     if pairs is None:
         return jt.zeros(1)
-    
-    axis = find_reflection_axis(target, pairs)  # 形状 (3,)
 
+    B = pred.shape[0]
+    axis_batch = find_reflection_axis(target, pairs)  # (B, 3)
     loss = 0.0
     for left, right in pairs:
-        left_joint = pred[:, left, :]
-        right_joint = pred[:, right, :]
-        # 右关节绕axis轴反射
-        right_mirrored = reflect_points(right_joint, axis)
+        left_joint = pred[:, left, :]         # (B, 3)
+        right_joint = pred[:, right, :]       # (B, 3)
+        right_mirrored = reflect_points(right_joint, axis_batch)  # (B, 3)
         loss += jt.norm(left_joint - right_mirrored, dim=-1).mean()
     return loss / len(pairs)
 
@@ -224,7 +207,7 @@ def train(args):
             # 对称性损失
             loss_sym = symmetry_loss(joints_pred, joints_gt, pairs=symmetric_pairs)
             
-            loss = loss_pos + 0.5 * loss_topo + 0.5 * loss_rel + 0.5 * loss_sym
+            loss = loss_pos + 0.2 * loss_topo + 0.2 * loss_rel + 0.5 * loss_sym
             
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -356,9 +339,14 @@ def main():
                         help='Weight decay (L2 penalty)')
     parser.add_argument('--momentum', type=float, default=0.9,
                         help='Momentum for SGD optimizer')
-    
+    from datetime import datetime
+    import os
+
+    now = datetime.now().strftime("%Y%m%d_%H%M%S") 
+    default_output_dir = os.path.join('output', now, 'skeleton')
+
     # Output parameters
-    parser.add_argument('--output_dir', type=str, default='output/skeleton',
+    parser.add_argument('--output_dir', type=str, default=default_output_dir,
                         help='Directory to save output files')
     parser.add_argument('--print_freq', type=int, default=10,
                         help='Print frequency')
