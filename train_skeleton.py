@@ -32,53 +32,77 @@ symmetric_pairs = [
     (17,21),
 ]
 
-# 对称关节对列表（左右对称的关节索引）
-def reflect_points(points, axis):
+def reflect_across_plane(points, plane_point, plane_normal):
     """
-    对points绕axis轴做反射变换。
+    将点 points 绕平面 (plane_point, plane_normal) 做反射。
     points: (B, 3)
-    axis: (B, 3) 每个样本一个单位向量
-    返回: 反射后的points (B,3)
+    plane_point: (B, 3)
+    plane_normal: (B, 3)
     """
-    proj = (points * axis).sum(dim=-1, keepdims=True)  # (B,1)
-    reflected = points - 2 * proj * axis  # (B,3)
+    vec = points - plane_point         # (B, 3)
+    proj = (vec * plane_normal).sum(dim=-1, keepdims=True)  # (B,1)
+    reflected = points - 2 * proj * plane_normal            # (B,3)
     return reflected
 
-def find_reflection_axis(target, pairs):
+def find_reflaection_plane_colomna(target, pairs):
     """
-    target: (B, N, 3)
-    pairs: 对称点索引对
-    返回: axis (B, 3)
+    通过脊柱节点(0,1,2,3,4,5)计算人体的对称平面
+    target: (B, N, 3) 关节点坐标
+    pairs: 对称点对列表
+    返回：c (B, 3), n (B, 3) 表示过点c、法向量为n的对称平面
     """
-    B = target.shape[0]
-    diffs = []
-
-    for left, right in pairs:
-        L = target[:, left, :]  # (B, 3)
-        R = target[:, right, :] # (B, 3)
-        diff = R - L            # 差向量
-        diffs.append(diff)
-
-    diffs = jt.stack(diffs, dim=1)  # (B, num_pairs, 3)
-    axis = diffs.mean(dim=1)        # (B, 3) 平均方向
-    axis = axis / (jt.norm(axis, dim=-1, keepdims=True) + 1e-6)  # 单位向量
-    return axis
+    # 获取脊柱节点
+    spine_nodes = target[:, 0:6, :]  # (B, 6, 3)
+    
+    # 1. 计算脊柱节点的中心点作为平面中心
+    c = spine_nodes.mean(dim=1)  # (B, 3)
+    
+    # 2. 计算脊柱方向向量
+    spine_start = spine_nodes[:, 0, :]  # (B, 3)
+    spine_end = spine_nodes[:, -1, :]   # (B, 3)
+    spine_dir = spine_end - spine_start  # (B, 3)
+    spine_dir = spine_dir / (jt.norm(spine_dir, dim=-1, keepdims=True) + 1e-6)
+    
+    # 3. 计算垂直于脊柱方向的向量作为平面法向量
+    # 使用脊柱节点拟合一个平面
+    spine_centered = spine_nodes - c.unsqueeze(1)  # (B, 6, 3)
+    
+    # 计算协方差矩阵
+    cov = jt.matmul(spine_centered.transpose(1, 2), spine_centered)  # (B, 3, 3)
+    
+    # 计算特征值和特征向量
+    # 使用SVD分解
+    U, S, V = jt.linalg.svd(cov)
+    
+    # 取最小特征值对应的特征向量作为平面法向量
+    n = U[:, :, -1]  # (B, 3)
+    
+    # 确保法向量与脊柱方向垂直
+    dot_product = (n * spine_dir).sum(dim=-1, keepdims=True)
+    n = jt.where(dot_product > 0, -n, n)
+    
+    # 单位化法向量
+    n = n / (jt.norm(n, dim=-1, keepdims=True) + 1e-6)
+    
+    return c, n
 
 def symmetry_loss(pred, target, pairs=None):
     """
-    每个样本独立推断反射轴，计算pred对称损失
+    每个样本独立推断对称平面，根据反射点计算对称损失
     """
     if pairs is None:
         return jt.zeros(1)
 
     B = pred.shape[0]
-    axis_batch = find_reflection_axis(target, pairs)  # (B, 3)
+    plane_c, plane_n = find_reflaection_plane_colomna(target, pairs)  # (B, 3), (B, 3)
     loss = 0.0
+
     for left, right in pairs:
         left_joint = pred[:, left, :]         # (B, 3)
         right_joint = pred[:, right, :]       # (B, 3)
-        right_mirrored = reflect_points(right_joint, axis_batch)  # (B, 3)
+        right_mirrored = reflect_across_plane(right_joint, plane_c, plane_n)  # (B, 3)
         loss += jt.norm(left_joint - right_mirrored, dim=-1).mean()
+
     return loss / len(pairs)
 
 def topology_loss(pred, target, parents):
@@ -220,7 +244,11 @@ def train(args):
             # Print progress
             if (batch_idx + 1) % args.print_freq == 0 or (batch_idx + 1) == len(train_loader):
                 log_message(f"Epoch [{epoch+1}/{args.epochs}] Batch [{batch_idx+1}/{len(train_loader)}] "
-                           f"Loss: {loss.item():.4f}")
+                           f"Total Loss: {loss.item():.4f} "
+                           f"Pos Loss: {loss_pos.item():.4f} "
+                           f"Topo Loss: {loss_topo.item():.4f} "
+                           f"Rel Loss: {loss_rel.item():.4f} "
+                           f"Sym Loss: {loss_sym.item():.4f}")
         
         # Calculate epoch statistics
         train_loss /= len(train_loader)
@@ -234,9 +262,13 @@ def train(args):
         global_step = epoch * len(train_loader) + batch_idx
         wandb.log({
             "skeleton epoch": epoch + 1,
-            "skeleton train_loss": train_loss,
+            "skeleton total_loss": loss.item(),
+            "skeleton pos_loss": loss_pos.item(),
+            "skeleton topo_loss": loss_topo.item(),
+            "skeleton rel_loss": loss_rel.item(),
+            "skeleton sym_loss": loss_sym.item(),
             "skeleton learning_rate": optimizer.lr if hasattr(optimizer, 'lr') else args.learning_rate
-        },step=global_step)
+        }, step=global_step)
 
         # Validation phase
         if val_loader is not None and (epoch + 1) % args.val_freq == 0:
@@ -312,7 +344,7 @@ def main():
                         help='Path to the training data list file')
     parser.add_argument('--val_data_list', type=str, default='',
                         help='Path to the validation data list file')
-    parser.add_argument('--data_root', type=str, default='data',
+    parser.add_argument('--data_root', type=str, default='newdata',
                         help='Root directory for the data files')
     
     # Model parameters
@@ -348,6 +380,7 @@ def main():
     # Output parameters
     parser.add_argument('--output_dir', type=str, default=default_output_dir,
                         help='Directory to save output files')
+    os.makedirs(args.output_dir, exist_ok=True)
     parser.add_argument('--print_freq', type=int, default=10,
                         help='Print frequency')
     parser.add_argument('--save_freq', type=int, default=10,
