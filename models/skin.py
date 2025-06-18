@@ -7,7 +7,7 @@ import sys
 from math import sqrt
 
 # Import the PCT model components
-from PCT.networks.cls.pct import Point_Transformer, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group
+from PCT.networks.cls.pct import Point_Transformer, Point_Transformer_Big, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group
 
 
 class MLP(nn.Module):
@@ -28,6 +28,36 @@ class MLP(nn.Module):
         B = x.shape[0]
         return self.encoder(x.reshape(-1, self.input_dim)).reshape(B, -1, self.output_dim)
 
+class EnhancedMLP(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super().__init__()
+        self.layer1 = nn.Sequential(
+            nn.Linear(input_dim, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+        )
+        self.layer2 = nn.Sequential(
+            nn.Linear(512, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+        )
+        self.layer3 = nn.Sequential(
+            nn.Linear(512, output_dim),
+            nn.BatchNorm1d(output_dim),
+            nn.ReLU(),
+        )
+    
+    def execute(self, x):
+        B, N, _ = x.shape
+        x = x.reshape(-1, x.shape[-1])  # (B*N, input_dim)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = x.reshape(B, N, -1)
+        return x
+
 class SimpleSkinModel(nn.Module):
 
     def __init__(self, feat_dim: int, num_joints: int):
@@ -36,8 +66,8 @@ class SimpleSkinModel(nn.Module):
         self.feat_dim = feat_dim
 
         self.pct = Point_Transformer(output_channels=feat_dim)
-        self.joint_mlp = MLP(3 + feat_dim, feat_dim)
-        self.vertex_mlp = MLP(3 + feat_dim, feat_dim)
+        self.joint_mlp = MLP(3 + feat_dim, feat_dim) # 关节
+        self.vertex_mlp = MLP(3 + feat_dim, feat_dim) # 顶点
         self.relu = nn.ReLU()
     
     def execute(self, vertices: jt.Var, joints: jt.Var):

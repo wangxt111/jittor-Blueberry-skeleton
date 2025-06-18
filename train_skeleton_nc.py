@@ -87,6 +87,31 @@ def find_reflaection_plane_colomna(target, pairs=None): # pairs is not used insi
     
     return c, n
 
+def plane_loss(plane_pred, joints_gt):
+    """
+    plane_pred: (B, 4)
+    joints_gt: (B, 22, 3) ground truth joints
+    return: scalar loss
+    """
+    c_gt, n_gt = find_reflaection_plane_colomna(joints_gt)  # (B,3), (B,3)
+
+    n_pred = plane_pred[:, :3]  # (B,3)
+    d_pred = plane_pred[:, 3]  # (B,)
+
+    # normalize predicted normal
+    n_pred = n_pred / (jt.norm(n_pred, dim=-1, keepdims=True) + 1e-6)
+
+    # d_gt = -dot(n_gt, c_gt)
+    d_gt = -(n_gt * c_gt).sum(dim=-1)  # (B,)
+
+    # normal loss: direction difference
+    normal_loss = jt.norm(n_pred - n_gt, dim=-1)  # (B,)
+
+    # offset loss
+    offset_loss = jt.abs(d_pred - d_gt)  # (B,)
+
+    return (normal_loss + offset_loss).mean()
+
 def symmetry_loss(pred, target, pairs):
     """
     每个样本独立推断对称平面，根据反射点计算对称损失
@@ -375,7 +400,7 @@ def train(args,name):
             vertices = original_vertices.permute(0, 2, 1)
             joints_gt = original_joints.reshape(-1, 22, 3)
             
-            outputs = model(vertices)
+            outputs, plane_pred = model(vertices)
             
             joints_pred = outputs.reshape(-1, 22, 3)
 
@@ -395,8 +420,12 @@ def train(args,name):
             # loss_J2J += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
 
             loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
-            loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
-            
+
+            loss_nc = plane_loss(plane_pred, joints_gt)
+
+            # loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
+            loss = loss_pos + loss_nc + 0.8 * loss_J2J
+
             # Backward pass and optimize
             optimizer.zero_grad()
             optimizer.backward(loss)
@@ -408,12 +437,14 @@ def train(args,name):
             # Print progress
             if (batch_idx + 1) % args.print_freq == 0 or (batch_idx + 1) == len(train_loader):
                 log_message(f"Epoch [{epoch+1}/{args.epochs}] Batch [{batch_idx+1}/{len(train_loader)}] "
-                           f"Total Loss: {loss.item():.4f} "
-                           f"Pos Loss: {loss_pos.item():.4f} "
-                           f"Topo Loss: {loss_topo.item():.4f} "
-                           f"Rel Loss: {loss_rel.item():.4f} "
-                           f"Sym Loss: {loss_sym.item():.4f}"
-                           f"J2J Loss: {loss_J2J:.6f}")# 新增 CD Loss
+                            f"Total Loss: {loss.item():.4f} "
+                            f"Pos Loss: {loss_pos.item():.4f} "
+                            f"Topo Loss: {loss_topo.item():.4f} "
+                            f"Rel Loss: {loss_rel.item():.4f} "
+                            f"Sym Loss: {loss_sym.item():.4f}"
+                            f"J2J Loss: {loss_J2J:.6f}"
+                            f"Plane Loss: {loss_nc.item():.4f}"
+                           )# 新增 CD Loss
         
         # Calculate epoch statistics
         train_loss /= len(train_loader)
@@ -562,7 +593,7 @@ def main():
     from datetime import datetime
     import os
 
-    name = "Sym+J2Jloss+no_epochdata"
+    name = "Symnc+J2Jloss+no_epochdata"
     default_output_dir = os.path.join('output', 'skeleton', name)
 
     # Output parameters

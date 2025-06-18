@@ -148,7 +148,7 @@ class Point_Transformer_Big(nn.Module):
     def __init__(self, output_channels=40):
         super(Point_Transformer_Big, self).__init__()
         
-        channels = 256
+        channels = 128
         self.conv1 = nn.Conv1d(3, channels, kernel_size=1, bias=False)
         self.conv2 = nn.Conv1d(channels, channels, kernel_size=1, bias=False)
 
@@ -165,23 +165,23 @@ class Point_Transformer_Big(nn.Module):
         self.sa7 = SA_Layer(channels)
         self.sa8 = SA_Layer(channels)
 
-        self.conv_fuse = nn.Sequential(nn.Conv1d(2048, 4096, kernel_size=1, bias=False),
-                                   nn.BatchNorm1d(4096),
+        self.conv_fuse = nn.Sequential(nn.Conv1d(8*channels, 16*channels, kernel_size=1, bias=False),
+                                   nn.BatchNorm1d(16*channels),
                                    nn.LeakyReLU(scale=0.2))
 
-        self.linear1 = nn.Linear(4096, 2048, bias=False)
-        self.bn6 = nn.BatchNorm1d(2048)
+        self.linear1 = nn.Linear(16*channels, 8*channels, bias=False)
+        self.bn6 = nn.BatchNorm1d(8*channels)
         self.dp1 = nn.Dropout(p=0.5)
-        self.linear2 = nn.Linear(2048, 1024)
-        self.bn7 = nn.BatchNorm1d(1024)
+        self.linear2 = nn.Linear(8*channels, 4*channels)
+        self.bn7 = nn.BatchNorm1d(4*channels)
         self.dp2 = nn.Dropout(p=0.5)
-        self.linear3 = nn.Linear(1024, 512)
-        self.bn8 = nn.BatchNorm1d(512)
+        self.linear3 = nn.Linear(4*channels, 2*channels)
+        self.bn8 = nn.BatchNorm1d(2*channels)
         self.dp3 = nn.Dropout(p=0.5)
-        self.linear4 = nn.Linear(512, 256)
-        self.bn9 = nn.BatchNorm1d(256)
+        self.linear4 = nn.Linear(2*channels, channels)
+        self.bn9 = nn.BatchNorm1d(channels)
         self.dp4 = nn.Dropout(p=0.5)
-        self.linear5 = nn.Linear(256, output_channels)
+        self.linear5 = nn.Linear(channels, output_channels)
 
         self.relu = nn.ReLU()
         
@@ -284,11 +284,13 @@ class SA_Layer(nn.Module):
         self.act = nn.ReLU()
         self.softmax = nn.Softmax(dim=-1)
         # 添加位置编码转换层
-        self.pos_conv = nn.Conv1d(3, channels, 1, bias=False)
+        # self.pos_conv = nn.Conv1d(3, channels, 1, bias=False)
+        self.xyz_conv = nn.Conv1d(3, channels, 1, bias=False)
 
     def execute(self, x, xyz):
         # 将3通道的位置信息转换为channels通道
-        pos_encoding = self.pos_conv(xyz)  # [B, channels, N]
+        # pos_encoding = self.pos_conv(xyz)  # [B, channels, N]
+        pos_encoding = self.xyz_conv(xyz)
         
         # 现在可以安全地相加
         x = x + pos_encoding
