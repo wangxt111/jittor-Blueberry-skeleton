@@ -22,41 +22,73 @@ class MLP(nn.Module):
             nn.Linear(512, output_dim),
             nn.BatchNorm1d(output_dim),
             nn.ReLU(),
+            nn.Dropout(0.2),
         )
     
     def execute(self, x):
         B = x.shape[0]
         return self.encoder(x.reshape(-1, self.input_dim)).reshape(B, -1, self.output_dim)
 
-class EnhancedMLP(nn.Module):
-    def __init__(self, input_dim, output_dim):
+def relative_encoding(vertices, joints):
+    """
+    vertices: (B, N, 3)
+    joints: (B, J, 3)
+    return: (B, N, J, 4) relative offset + distance
+    """
+    rel_pos = vertices.unsqueeze(2) - joints.unsqueeze(1)  # (B, N, J, 3)
+    distance = jt.norm(rel_pos, dim=-1, keepdim=True)      # (B, N, J, 1)
+    return concat([rel_pos, distance], dim=-1)             # (B, N, J, 4)
+
+class SkinModel(nn.Module):
+    def __init__(self, feat_dim: int, num_joints: int):
         super().__init__()
-        self.layer1 = nn.Sequential(
-            nn.Linear(input_dim, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-        )
-        self.layer2 = nn.Sequential(
-            nn.Linear(512, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(0.1),
-        )
-        self.layer3 = nn.Sequential(
-            nn.Linear(512, output_dim),
-            nn.BatchNorm1d(output_dim),
-            nn.ReLU(),
-        )
-    
-    def execute(self, x):
-        B, N, _ = x.shape
-        x = x.reshape(-1, x.shape[-1])  # (B*N, input_dim)
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = x.reshape(B, N, -1)
-        return x
+        self.num_joints = num_joints
+        self.feat_dim = feat_dim
+
+        self.pct = Point_Transformer(output_channels=feat_dim)
+
+        self.joint_mlp = MLP(3 + feat_dim, feat_dim)
+        self.vertex_mlp = MLP(3 + feat_dim, feat_dim)
+        self.fusion_mlp = MLP(feat_dim * 2 + 4, feat_dim)  # vertex + joint + relative pos
+
+        self.relu = nn.ReLU()
+
+    def execute(self, vertices: jt.Var, joints: jt.Var):
+        B, N, _ = vertices.shape
+        J = self.num_joints
+        # (B, C, N) -> (B, N, feat_dim)
+        shape_latent = self.relu(self.pct(vertices.permute(0, 2, 1)))
+
+        # Vertex embedding: (B, N, feat_dim)
+        v_input = concat([vertices, shape_latent.unsqueeze(1).repeat(1, vertices.shape[1], 1)], dim=-1)
+        v_latent = self.vertex_mlp(v_input)
+
+        # Joint embedding: (B, J, feat_dim)
+        j_input = concat([joints, shape_latent.unsqueeze(1).repeat(1, self.num_joints, 1)], dim=-1)
+        j_latent = self.joint_mlp(j_input)
+
+        # Relative positional encoding: (B, N, J, 4)
+        rel_encoding = relative_encoding(vertices, joints)
+
+        # Broadcast features: (B, N, J, feat_dim)
+        v_feat = v_latent.unsqueeze(2).repeat(1, 1, J, 1)
+        j_feat = j_latent.unsqueeze(1).repeat(1, N, 1, 1)
+
+        # Fuse all info: (B, N, J, feat_dim)
+        fused_input = concat([v_feat, j_feat, rel_encoding], dim=-1)
+        fused_input_flat = fused_input.reshape(-1, fused_input.shape[-1])  # (B*N*J, input_dim)
+        fused_feat = self.fusion_mlp(fused_input_flat)  # 输出 (B*N*J, feat_dim)
+        fused_feat = fused_feat.reshape(B, N, J, -1)
+
+        distance = rel_encoding[..., -1]
+        decay_weight = 1.0 / (distance + 1e-6)
+
+        # Attention score: (B, N, J)
+        score = fused_feat.sum(dim=-1) * decay_weight
+        weights = nn.softmax(score, dim=-1)
+
+        assert not jt.isnan(weights).any()
+        return weights
 
 class SimpleSkinModel(nn.Module):
 
@@ -90,9 +122,11 @@ class SimpleSkinModel(nn.Module):
 
         return res
 
-
 # Factory function to create models
 def create_model(model_name='pct', feat_dim=256, **kwargs):
     if model_name == "pct":
         return SimpleSkinModel(feat_dim=feat_dim, num_joints=22)
+    elif model_name == "skin":
+        print("skinnn")
+        return SkinModel(feat_dim=feat_dim, num_joints=22)
     raise NotImplementedError()

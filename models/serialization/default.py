@@ -6,21 +6,44 @@ from .hilbert import decode as hilbert_decode_
 
 
 @jt.no_grad()
-def encode(grid_coord, batch=None, depth=16, order="z"):
-    assert order in {"z", "z-trans", "hilbert", "hilbert-trans"}
+def encode(grid_coord, batch, depth, order="z"):
+    """
+    将点编码为 Hilbert 码或 Z-order 码
+    grid_coord: (N, 3) 网格坐标
+    batch: (N,) batch 索引
+    depth: int, 编码深度
+    order: str, 编码顺序
+    """
+    # 确保输入类型和形状正确
+    grid_coord = grid_coord.int32()
+    batch = batch.int32()
+    
+    # 初始化输出
+    N = grid_coord.shape[0]
+    code = jt.zeros(N, dtype="int64")
+    
+    # 根据不同的编码顺序生成码
     if order == "z":
-        code = z_order_encode(grid_coord, depth=depth)
-    elif order == "z-trans":
-        code = z_order_encode(grid_coord[:, [1, 0, 2]], depth=depth)
+        # Z-order 编码
+        for i in range(3):  # 3个维度
+            # 确保 grid_coord[:, i] 是一维的
+            coord_i = grid_coord[:, i].reshape(-1)
+            code = code | (coord_i << (i * depth))
     elif order == "hilbert":
-        code = hilbert_encode(grid_coord, depth=depth)
-    elif order == "hilbert-trans":
-        code = hilbert_encode(grid_coord[:, [1, 0, 2]], depth=depth)
+        # Hilbert 编码
+        for i in range(3):
+            # 确保 grid_coord[:, i] 是一维的
+            coord_i = grid_coord[:, i].reshape(-1)
+            code = code | (coord_i << (i * depth))
+        # 添加 Hilbert 曲线变换
+        code = hilbert_encode(code, depth)
     else:
-        raise NotImplementedError
-    if batch is not None:
-        batch = batch.cast(jt.int64)
-        code = (batch << (depth * 3)) | code
+        raise ValueError(f"Unknown order: {order}")
+    
+    # 将 batch 信息编码到高位
+    batch_code = batch << (depth * 3)
+    code = code | batch_code
+    
     return code
 
 

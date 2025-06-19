@@ -442,7 +442,7 @@ def train(args,name):
                             f"Topo Loss: {loss_topo.item():.4f} "
                             f"Rel Loss: {loss_rel.item():.4f} "
                             f"Sym Loss: {loss_sym.item():.4f}"
-                            f"J2J Loss: {loss_J2J:.6f}"
+                            f"J2J Loss: {loss_J2J.item():.6f}"
                             f"Plane Loss: {loss_nc.item():.4f}"
                            )# 新增 CD Loss
         
@@ -483,7 +483,7 @@ def train(args,name):
                     vertices = vertices.permute(0, 2, 1)  # [B, 3, N]
                 
                 # Forward pass
-                outputs = model(vertices)
+                outputs, _ = model(vertices)
                 loss = criterion(outputs, joints)
                 
                 # export render results
@@ -545,7 +545,7 @@ def main():
     
     # Model parameters
     parser.add_argument('--model_name', type=str, default='pct',
-                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym'],
+                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym', 'symnc'],
                         help='Model architecture to use')
     parser.add_argument('--model_type', type=str, default='standard',
                         choices=['standard', 'enhanced'],

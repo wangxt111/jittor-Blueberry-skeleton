@@ -263,10 +263,8 @@ def augment_data_for_batch(vertices_batch_jt, joints_batch_jt,
 
     return augmented_vertices_batch_jt, augmented_joints_batch_jt
 
-
-# --- 训练函数 (修改以包含实时数据增强) ---
-
 def train(args,name):
+    patience = 5
     """
     Main training function
     
@@ -396,7 +394,7 @@ def train(args,name):
 
             loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
             loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
-            
+
             # Backward pass and optimize
             optimizer.zero_grad()
             optimizer.backward(loss)
@@ -482,9 +480,15 @@ def train(args,name):
             # Save best model
             if J2J_loss < best_loss:
                 best_loss = J2J_loss
+                no_improve_epochs = 0
                 model_path = os.path.join(args.output_dir, 'best_model.pkl')
                 model.save(model_path)
                 log_message(f"Saved best model with loss {best_loss:.4f} to {model_path}")
+            else:
+                no_improve_epochs += 1
+                if no_improve_epochs >= patience:
+                    optimizer.lr /= 2
+                    no_improve_epochs = 0
         
         # Save checkpoint
         if (epoch + 1) % args.save_freq == 0:
@@ -525,12 +529,12 @@ def main():
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=300,
                         help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, default='adam',
                         choices=['sgd', 'adam'],
                         help='Optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=0.00001,
+    parser.add_argument('--learning_rate', type=float, default=0.0001,
                         help='Initial learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='Weight decay (L2 penalty)')
@@ -562,7 +566,7 @@ def main():
     from datetime import datetime
     import os
 
-    name = "Sym+J2Jloss+no_epochdata"
+    name = "lr+epoch300"
     default_output_dir = os.path.join('output', 'skeleton', name)
 
     # Output parameters

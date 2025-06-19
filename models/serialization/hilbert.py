@@ -22,43 +22,38 @@ def gray2binary(gray, axis=-1):
         shift = shift // 2
     return out
 
-def encode(locs, num_dims, num_bits):
-    orig_shape = locs.shape
-    device = locs.device
+def encode(locs, num_dims=3, num_bits=8):
+    """Encode points to Hilbert codes.
+    Args:
+        locs: (N, num_dims) int32 tensor
+        num_dims: int, number of dimensions
+        num_bits: int, number of bits per dimension
+    Returns:
+        (N,) int64 tensor
+    """
+    # 确保输入类型和形状正确
+    locs = locs.int32()
+    N = locs.shape[0]
+    num_dims = locs.shape[1]
+    num_bits = num_bits
 
-    if orig_shape[-1] != num_dims:
-        raise ValueError(f"Expected last dimension {num_dims}, got {orig_shape[-1]}.")
+    # 初始化输出
+    out = jt.zeros(N, dtype="int64")
 
-    if num_dims * num_bits > 63:
-        raise ValueError(f"Too many bits ({num_dims*num_bits}), max 63.")
+    # 对每个维度进行处理
+    for i in range(num_dims):
+        # 获取当前维度的坐标
+        x = locs[:, i]
+        # 将坐标转换为二进制
+        for j in range(num_bits):
+            # 获取第j位并确保形状匹配
+            bit = ((x >> j) & 1).reshape(-1)
+            # 计算位移量
+            shift = i * num_bits + j
+            # 将位添加到输出中，使用广播机制
+            out = out | (bit << shift)
 
-    locs_uint8 = locs.cast(jt.int64).reshape([-1, num_dims, 8])
-    bitpack_mask = (1 << jt.arange(8)).stop_grad()
-    bitpack_mask_rev = bitpack_mask[::-1]
-
-    gray = (
-        (locs_uint8.unsqueeze(-1).bitwise_and(bitpack_mask_rev))
-        .ne(0)
-        .cast(jt.uint8)
-        .reshape(-1, num_dims, 64)[..., -num_bits:]
-    )
-
-    for bit in range(num_bits):
-        for dim in range(num_dims):
-            mask = gray[:, dim, bit]
-            gray[:, 0, bit + 1:] = jt.logical_xor(gray[:, 0, bit + 1:], mask.unsqueeze(1))
-            to_flip = jt.logical_and(
-                ~mask.unsqueeze(1),
-                jt.logical_xor(gray[:, 0, bit + 1:], gray[:, dim, bit + 1:])
-            )
-            gray[:, dim, bit + 1:] = jt.logical_xor(gray[:, dim, bit + 1:], to_flip)
-            gray[:, 0, bit + 1:] = jt.logical_xor(gray[:, 0, bit + 1:], to_flip)
-
-    gray = gray.transpose(1, 2).reshape(-1, num_bits * num_dims)
-    hh_bin = gray2binary(gray)
-    padded = jt.nn.pad(hh_bin, [64 - num_bits * num_dims, 0], mode="constant", value=0)
-    packed = (padded.reshape([-1, 8, 8]) * bitpack_mask).sum(-1).cast(jt.uint8)
-    return packed.cast(jt.int64).reshape(orig_shape[:-1])
+    return out
 
 def decode(hilberts, num_dims, num_bits):
     if num_dims * num_bits > 64:

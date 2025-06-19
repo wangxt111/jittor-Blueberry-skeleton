@@ -8,6 +8,8 @@ import sys
 # Import the PCT model components
 from PCT.networks.cls.pct import Point_Transformer, Point_Transformer_Big, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group
 
+from .ptv3_jittor import PointTransformerV3
+
 class SimpleSkeletonModel(nn.Module):
     
     def __init__(self, feat_dim: int, output_channels: int):
