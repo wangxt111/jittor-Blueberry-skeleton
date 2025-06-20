@@ -87,31 +87,6 @@ def find_reflaection_plane_colomna(target, pairs=None): # pairs is not used insi
     
     return c, n
 
-def plane_loss(plane_pred, joints_gt):
-    """
-    plane_pred: (B, 4)
-    joints_gt: (B, 22, 3) ground truth joints
-    return: scalar loss
-    """
-    c_gt, n_gt = find_reflaection_plane_colomna(joints_gt)  # (B,3), (B,3)
-
-    n_pred = plane_pred[:, :3]  # (B,3)
-    d_pred = plane_pred[:, 3]  # (B,)
-
-    # normalize predicted normal
-    n_pred = n_pred / (jt.norm(n_pred, dim=-1, keepdims=True) + 1e-6)
-
-    # d_gt = -dot(n_gt, c_gt)
-    d_gt = -(n_gt * c_gt).sum(dim=-1)  # (B,)
-
-    # normal loss: direction difference
-    normal_loss = jt.norm(n_pred - n_gt, dim=-1)  # (B,)
-
-    # offset loss
-    offset_loss = jt.abs(d_pred - d_gt)  # (B,)
-
-    return (normal_loss + offset_loss).mean()
-
 def symmetry_loss(pred, target, pairs):
     """
     每个样本独立推断对称平面，根据反射点计算对称损失
@@ -288,17 +263,15 @@ def augment_data_for_batch(vertices_batch_jt, joints_batch_jt,
 
     return augmented_vertices_batch_jt, augmented_joints_batch_jt
 
-
-# --- 训练函数 (修改以包含实时数据增强) ---
-
 def train(args,name):
+    patience = 5
     """
     Main training function
     
     Args:
         args: Command line arguments
     """
-    wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
+    wandb.login(key="237f5f006b70965c90d08069c63cc560ae78feb4")
     wandb.init(project="jittor", name=name)
 
     # Create output directory if it doesn't exist
@@ -400,7 +373,7 @@ def train(args,name):
             vertices = original_vertices.permute(0, 2, 1)
             joints_gt = original_joints.reshape(-1, 22, 3)
             
-            outputs, plane_pred = model(vertices)
+            outputs = model(vertices)
             
             joints_pred = outputs.reshape(-1, 22, 3)
 
@@ -420,11 +393,7 @@ def train(args,name):
             # loss_J2J += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
 
             loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
-
-            loss_nc = plane_loss(plane_pred, joints_gt)
-
-            # loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
-            loss = loss_pos + loss_nc + 0.8 * loss_J2J
+            loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
 
             # Backward pass and optimize
             optimizer.zero_grad()
@@ -437,14 +406,12 @@ def train(args,name):
             # Print progress
             if (batch_idx + 1) % args.print_freq == 0 or (batch_idx + 1) == len(train_loader):
                 log_message(f"Epoch [{epoch+1}/{args.epochs}] Batch [{batch_idx+1}/{len(train_loader)}] "
-                            f"Total Loss: {loss.item():.4f} "
-                            f"Pos Loss: {loss_pos.item():.4f} "
-                            f"Topo Loss: {loss_topo.item():.4f} "
-                            f"Rel Loss: {loss_rel.item():.4f} "
-                            f"Sym Loss: {loss_sym.item():.4f}"
-                            f"J2J Loss: {loss_J2J.item():.6f}"
-                            f"Plane Loss: {loss_nc.item():.4f}"
-                           )# 新增 CD Loss
+                           f"Total Loss: {loss.item():.4f} "
+                           f"Pos Loss: {loss_pos.item():.4f} "
+                           f"Topo Loss: {loss_topo.item():.4f} "
+                           f"Rel Loss: {loss_rel.item():.4f} "
+                           f"Sym Loss: {loss_sym.item():.4f}"
+                           f"J2J Loss: {loss_J2J:.6f}")# 新增 CD Loss
         
         # Calculate epoch statistics
         train_loss /= len(train_loader)
@@ -483,7 +450,7 @@ def train(args,name):
                     vertices = vertices.permute(0, 2, 1)  # [B, 3, N]
                 
                 # Forward pass
-                outputs, _ = model(vertices)
+                outputs = model(vertices)
                 loss = criterion(outputs, joints)
                 
                 # export render results
@@ -513,9 +480,15 @@ def train(args,name):
             # Save best model
             if J2J_loss < best_loss:
                 best_loss = J2J_loss
+                no_improve_epochs = 0
                 model_path = os.path.join(args.output_dir, 'best_model.pkl')
                 model.save(model_path)
                 log_message(f"Saved best model with loss {best_loss:.4f} to {model_path}")
+            else:
+                no_improve_epochs += 1
+                if no_improve_epochs >= patience:
+                    optimizer.lr /= 2
+                    no_improve_epochs = 0
         
         # Save checkpoint
         if (epoch + 1) % args.save_freq == 0:
@@ -545,7 +518,7 @@ def main():
     
     # Model parameters
     parser.add_argument('--model_name', type=str, default='pct',
-                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym', 'symnc'],
+                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym', "force_pct"],
                         help='Model architecture to use')
     parser.add_argument('--model_type', type=str, default='standard',
                         choices=['standard', 'enhanced'],
@@ -556,12 +529,12 @@ def main():
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=16,
                         help='Batch size for training')
-    parser.add_argument('--epochs', type=int, default=100,
+    parser.add_argument('--epochs', type=int, default=300,
                         help='Number of training epochs')
     parser.add_argument('--optimizer', type=str, default='adam',
                         choices=['sgd', 'adam'],
                         help='Optimizer to use')
-    parser.add_argument('--learning_rate', type=float, default=0.00001,
+    parser.add_argument('--learning_rate', type=float, default=0.0001,
                         help='Initial learning rate')
     parser.add_argument('--weight_decay', type=float, default=1e-4,
                         help='Weight decay (L2 penalty)')
@@ -593,7 +566,7 @@ def main():
     from datetime import datetime
     import os
 
-    name = "Symnc+J2Jloss+no_epochdata"
+    name = "force"
     default_output_dir = os.path.join('output', 'skeleton', name)
 
     # Output parameters

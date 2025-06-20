@@ -145,6 +145,12 @@ def chamfer_distance_jittor(set_a, set_b):
     cd_sq_per_sample = dist_a_to_b_sq.mean(dim=-1) + dist_b_to_a_sq.mean(dim=-1) # (B,)
     return cd_sq_per_sample.mean() # 返回批次平均的平方Chamfer Distance
 
+def cd_j2j_loss(pred_joints, joints):
+    # pred_joints, joints: [B, 22, 3]
+    distances = jt.norm(pred_joints - joints, dim=2)
+    cd_j2j = jt.mean(distances)
+    return cd_j2j
+
 def relative_position_loss(pred, target):
     """保持骨骼中心和相对位置一致性"""
     pred_center = pred.mean(dim=1, keepdims=True)
@@ -264,14 +270,14 @@ def augment_data_for_batch(vertices_batch_jt, joints_batch_jt,
     return augmented_vertices_batch_jt, augmented_joints_batch_jt
 
 def train(args,name):
-    patience = 5
+    patience = 10
     """
     Main training function
     
     Args:
         args: Command line arguments
     """
-    wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
+    # wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
     wandb.init(project="jittor", name=name)
 
     # Create output directory if it doesn't exist
@@ -293,7 +299,8 @@ def train(args,name):
     # Create model
     model = create_model(
         model_name=args.model_name,
-        model_type=args.model_type
+        model_type=args.model_type,
+        input_channels=3
     )
     
     sampler = SamplerMix(num_samples=1024, vertex_samples=512)
@@ -393,6 +400,7 @@ def train(args,name):
             # loss_J2J += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
 
             loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
+            # loss_J2J = cd_j2j_loss(joints_pred, joints_gt)
             loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
 
             # Backward pass and optimize
@@ -438,6 +446,7 @@ def train(args,name):
             model.eval()
             val_loss = 0.0
             J2J_loss = 0.0
+            CD_J2J_loss = 0.0
             
             show_id = np.random.randint(0, len(val_loader))
             for batch_idx, data in enumerate(val_loader):
@@ -464,12 +473,15 @@ def train(args,name):
                 val_loss += loss.item()
                 for i in range(outputs.shape[0]):
                     J2J_loss += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
+
+                CD_J2J_loss += cd_j2j_loss(joints_pred, joints_gt)
             
             # Calculate validation statistics
             val_loss /= len(val_loader)
             J2J_loss /= len(val_loader)
+            CD_J2J_loss /= len(val_loader)
             
-            log_message(f"Validation Loss: {val_loss:.4f} J2J Loss: {J2J_loss:.4f}")
+            log_message(f"Validation Loss: {val_loss:.4f} J2J Loss: {J2J_loss:.4f} CD J2J Loss: {CD_J2J_loss:.4f}")
 
             wandb.log({
                 "skeleton epoch": epoch + 1,
@@ -518,7 +530,7 @@ def main():
     
     # Model parameters
     parser.add_argument('--model_name', type=str, default='pct',
-                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym'],
+                        choices=['pct', 'pct2', 'custom_pct', 'skeleton', 'sym', 'multihead'],
                         help='Model architecture to use')
     parser.add_argument('--model_type', type=str, default='standard',
                         choices=['standard', 'enhanced'],
@@ -566,7 +578,7 @@ def main():
     from datetime import datetime
     import os
 
-    name = "lr+epoch300"
+    name = "pct2_all"
     default_output_dir = os.path.join('output', 'skeleton', name)
 
     # Output parameters

@@ -13,6 +13,16 @@ def index_points(points, idx):
         new_points:, indexed points data, [B, S, C]
     """
     B = points.shape[0]
+
+    # --- 添加这些行进行调试 ---
+    print(f"<<< DEBUG: Inside index_points:")
+    print(f"<<< DEBUG: Received idx shape: {idx.shape}")
+    # 在您计算 view_shape 的逻辑后面，打印一下 view_shape
+    # 假设您的代码中有 view_shape = ... 这行
+    print(f"<<< DEBUG: Calculated view_shape for reshape: {view_shape}") 
+    # --- 调试代码结束 ---
+
+    
     view_shape = list(idx.shape)
     view_shape[1:] = [1] * (len(view_shape) - 1)
     repeat_shape = list(idx.shape)

@@ -1,1 +1,5 @@
-python predict_skeleton.py --predict_data_list data/test_list.txt --data_root data --model_name sym --pretrained_model '/home/ubuntu/jittor2025_skeleton/output/skeleton/Extreme-Opt-v4-Debug/best_model.pkl' --predict_output_dir predict --batch_size 4
+skeleton_model_name=pct
+skeleton_model_name1=force_pct
+skin_model_name=skin
+python predict_skeleton.py --predict_data_list data/test_list_m.txt --data_root data --model_name $skeleton_model_name --pretrained_model '/home/ubuntu/jittor2025_skeleton/output/sym/m/best_model.pkl' --predict_output_dir predict --batch_size 4
+python predict_skeleton.py --predict_data_list data/test_list_v.txt --data_root data --model_name $skeleton_model_name1 --pretrained_model '/home/ubuntu/jittor2025_skeleton/output/sym/v/best_model.pkl' --predict_output_dir predict --batch_size 4

@@ -142,18 +142,21 @@ def train(args, name):
             loss_l1 = criterion_l1(outputs, skin)
             loss = loss_mse + loss_l1
 
-            # LBS重建
-            # V_recon = compute_lbs(vertices, joints, joints_pred, outputs)
+            # forward
+            # weights = model(vertices, joints_pred)  # (B, N, J)
+
+            # # LBS重建
+            # V_recon = compute_lbs(vertices, joints_T, joints_pred, weights)
             # lbs_loss = chamfer_distance(V_recon, vertices)
 
-            # 平滑性
-            # smooth_loss = smoothness_loss(outputs, vertices, k=8)
+            # # 平滑性
+            # smooth_loss = smoothness_loss(weights, vertices, k=8)
 
             # # 稀疏性
-            # sparse_loss = sparsity_loss(outputs)
+            # sparse_loss = sparsity_loss(weights)
 
             # # 总损失组合
-            # total_loss = 0.5 * smooth_loss + 0.0 * sparse_loss + loss
+            # total_loss = lbs_loss + 0.1 * smooth_loss + 0.01 * sparse_loss + loss
             
             # Backward pass and optimize
             optimizer.zero_grad()
