@@ -19,10 +19,11 @@ class MLP(nn.Module):
             nn.Linear(input_dim, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
+            nn.Dropout(0.3),
             nn.Linear(512, output_dim),
             nn.BatchNorm1d(output_dim),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.2)
         )
     
     def execute(self, x):
@@ -39,6 +40,104 @@ def relative_encoding(vertices, joints):
     distance = jt.norm(rel_pos, dim=-1, keepdim=True)      # (B, N, J, 1)
     return concat([rel_pos, distance], dim=-1)             # (B, N, J, 4)
 
+# class SkinModel(nn.Module):
+#     def __init__(self, feat_dim: int, num_joints: int):
+#         super().__init__()
+#         self.num_joints = num_joints
+#         self.feat_dim = feat_dim
+
+#         self.pct = Point_Transformer(output_channels=feat_dim)
+
+#         self.joint_mlp = MLP(3 + feat_dim, feat_dim)
+#         self.vertex_mlp = MLP(3 + feat_dim, feat_dim)
+#         self.fusion_mlp = MLP(feat_dim * 2 + 4, feat_dim)  # vertex + joint + relative pos
+
+#         self.relu = nn.ReLU()
+
+#     def execute(self, vertices: jt.Var, joints: jt.Var):
+#         B, N, _ = vertices.shape
+#         J = self.num_joints
+#         # (B, C, N) -> (B, N, feat_dim)
+#         shape_latent = self.relu(self.pct(vertices.permute(0, 2, 1)))
+
+#         # Vertex embedding: (B, N, feat_dim)
+#         v_input = concat([vertices, shape_latent.unsqueeze(1).repeat(1, vertices.shape[1], 1)], dim=-1)
+#         v_latent = self.vertex_mlp(v_input)
+
+#         # Joint embedding: (B, J, feat_dim)
+#         j_input = concat([joints, shape_latent.unsqueeze(1).repeat(1, self.num_joints, 1)], dim=-1)
+#         j_latent = self.joint_mlp(j_input)
+
+#         # Relative positional encoding: (B, N, J, 4)
+#         rel_encoding = relative_encoding(vertices, joints)
+
+#         # Broadcast features: (B, N, J, feat_dim)
+#         v_feat = v_latent.unsqueeze(2).repeat(1, 1, J, 1)
+#         j_feat = j_latent.unsqueeze(1).repeat(1, N, 1, 1)
+
+#         # Fuse all info: (B, N, J, feat_dim)
+#         fused_input = concat([v_feat, j_feat, rel_encoding], dim=-1)
+#         fused_input_flat = fused_input.reshape(-1, fused_input.shape[-1])  # (B*N*J, input_dim)
+#         fused_feat = self.fusion_mlp(fused_input_flat)  # 输出 (B*N*J, feat_dim)
+#         fused_feat = fused_feat.reshape(B, N, J, -1)
+
+#         distance = rel_encoding[..., -1]
+#         decay_weight = 1.0 / (distance + 1e-6)
+
+#         # Attention score: (B, N, J)
+#         score = fused_feat.sum(dim=-1) * decay_weight
+#         weights = nn.softmax(score, dim=-1)
+
+#         assert not jt.isnan(weights).any()
+#         return weights
+    
+class SimpleAttention(nn.Module):
+    def __init__(self, embed_dim):
+        super().__init__()
+        self.q_proj = nn.Linear(embed_dim, embed_dim)
+        self.k_proj = nn.Linear(embed_dim, embed_dim)
+        self.v_proj = nn.Linear(embed_dim, embed_dim)
+        self.out_proj = nn.Linear(embed_dim, embed_dim)
+        self.scale = embed_dim ** -0.5
+
+    def execute(self, query, key, value):
+        # query/key/value: (B, N, J, C)
+        Q = self.q_proj(query)
+        K = self.k_proj(key)
+        V = self.v_proj(value)
+
+        # (B*N, J, C)
+        B, N, J, C = Q.shape
+        Q = Q.reshape(B * N, J, C)
+        K = K.reshape(B * N, J, C)
+        V = V.reshape(B * N, J, C)
+
+        scores = jt.matmul(Q, K.transpose(0, 2, 1)) * self.scale  # (B*N, J, J)
+        attn = nn.softmax(scores, dim=-1)
+        out = jt.matmul(attn, V)  # (B*N, J, C)
+        out = out.reshape(B, N, J, C)
+        return self.out_proj(out)
+    
+class ResidualAttentionBlock(nn.Module):
+    def __init__(self, dim):
+        super().__init__()
+        self.attn = SimpleAttention(dim)
+        self.norm1 = nn.LayerNorm(dim)
+        self.ffn = nn.Sequential(
+            nn.Linear(dim, dim * 4),
+            nn.ReLU(),
+            nn.Linear(dim * 4, dim)
+        )
+        self.norm2 = nn.LayerNorm(dim)
+
+    def execute(self, x):
+        x = x + self.attn(x, x, x)
+        x = self.norm1(x)
+        x = x + self.ffn(x)
+        x = self.norm2(x)
+        return x
+
+
 class SkinModel(nn.Module):
     def __init__(self, feat_dim: int, num_joints: int):
         super().__init__()
@@ -46,49 +145,42 @@ class SkinModel(nn.Module):
         self.feat_dim = feat_dim
 
         self.pct = Point_Transformer(output_channels=feat_dim)
-
         self.joint_mlp = MLP(3 + feat_dim, feat_dim)
         self.vertex_mlp = MLP(3 + feat_dim, feat_dim)
-        self.fusion_mlp = MLP(feat_dim * 2 + 4, feat_dim)  # vertex + joint + relative pos
+
+        self.fusion = ResidualAttentionBlock(feat_dim)
+
+        self.fuse_proj = nn.Linear(feat_dim * 2 + 4, feat_dim)
 
         self.relu = nn.ReLU()
-
     def execute(self, vertices: jt.Var, joints: jt.Var):
         B, N, _ = vertices.shape
         J = self.num_joints
-        # (B, C, N) -> (B, N, feat_dim)
-        shape_latent = self.relu(self.pct(vertices.permute(0, 2, 1)))
 
-        # Vertex embedding: (B, N, feat_dim)
-        v_input = concat([vertices, shape_latent.unsqueeze(1).repeat(1, vertices.shape[1], 1)], dim=-1)
-        v_latent = self.vertex_mlp(v_input)
+        shape_latent = self.relu(self.pct(vertices.permute(0, 2, 1)))  # (B, N, feat_dim)
 
-        # Joint embedding: (B, J, feat_dim)
-        j_input = concat([joints, shape_latent.unsqueeze(1).repeat(1, self.num_joints, 1)], dim=-1)
-        j_latent = self.joint_mlp(j_input)
+        v_input = concat([vertices, shape_latent.unsqueeze(1).repeat(1, N, 1)], dim=-1)
+        v_latent = self.vertex_mlp(v_input)  # (B, N, feat_dim)
 
-        # Relative positional encoding: (B, N, J, 4)
-        rel_encoding = relative_encoding(vertices, joints)
+        j_input = concat([joints, shape_latent.unsqueeze(1).repeat(1, J, 1)], dim=-1)
+        j_latent = self.joint_mlp(j_input)  # (B, J, feat_dim)
 
-        # Broadcast features: (B, N, J, feat_dim)
-        v_feat = v_latent.unsqueeze(2).repeat(1, 1, J, 1)
-        j_feat = j_latent.unsqueeze(1).repeat(1, N, 1, 1)
+        rel_encoding = relative_encoding(vertices, joints)  # (B, N, J, 4)
 
-        # Fuse all info: (B, N, J, feat_dim)
-        fused_input = concat([v_feat, j_feat, rel_encoding], dim=-1)
-        fused_input_flat = fused_input.reshape(-1, fused_input.shape[-1])  # (B*N*J, input_dim)
-        fused_feat = self.fusion_mlp(fused_input_flat)  # 输出 (B*N*J, feat_dim)
-        fused_feat = fused_feat.reshape(B, N, J, -1)
+        v_feat = v_latent.unsqueeze(2).repeat(1, 1, J, 1)  # (B, N, J, feat_dim)
+        j_feat = j_latent.unsqueeze(1).repeat(1, N, 1, 1)  # (B, N, J, feat_dim)
 
-        distance = rel_encoding[..., -1]
-        decay_weight = 1.0 / (distance + 1e-6)
+        fused_input = concat([v_feat, j_feat, rel_encoding], dim=-1)  # (B, N, J, 2*feat+4)
+        fused_input = self.fuse_proj(fused_input)  # (B, N, J, feat_dim)
 
-        # Attention score: (B, N, J)
-        score = fused_feat.sum(dim=-1) * decay_weight
+        attn_feat = self.fusion(fused_input)
+
+        score = attn_feat.sum(dim=-1) # (B, N, J)
         weights = nn.softmax(score, dim=-1)
 
         assert not jt.isnan(weights).any()
         return weights
+
 
 class SimpleSkinModel(nn.Module):
 

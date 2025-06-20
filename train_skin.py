@@ -20,61 +20,33 @@ import wandb
 # Set Jittor flags
 jt.flags.use_cuda = 1
 
-def compute_lbs(vertices, joints_T, joints_pred, weights):
-    """
-    vertices: (B, N, 3) 原始点云
-    joints_T: (B, J, 3) T-pose 关节
-    joints_pred: (B, J, 3) 预测关节
-    weights: (B, N, J) 预测权重
-    return: (B, N, 3) 通过LBS变形后的点云
-    """
-    B, N, J = weights.shape
-    # 骨骼变换 G: (B, J, 3)
-    G = joints_pred - joints_T  # 简化为平移变换
-    G = G.unsqueeze(1)  # (B, 1, J, 3)
-    weights_exp = weights.unsqueeze(-1)  # (B, N, J, 1)
-    
-    # 应用 LBS: V' = sum_j (w_ij * (v + G_j)) = v + sum_j w_ij * G_j
-    offset = (weights_exp * G).sum(dim=2)  # (B, N, 3)
-    deformed = vertices + offset
-    return deformed
-
 def smoothness_loss(weights, vertices, k=8):
-    """
-    weights: (B, N, J)
-    vertices: (B, N, 3)
-    k: 邻居数
-    """
-    from jittor.nn import pairwise_distance
-    B, N, J = weights.shape
+    # """
+    # weights: (B, N, J)
+    # vertices: (B, N, 3)
+    # k: 邻居数
+    # """
+    # B, N, J = weights.shape
 
-    # 计算距离最近的 k 个点 (用欧氏距离)
-    dist = pairwise_distance(vertices)  # (B, N, N)
-    knn_idx = jt.argsort(dist, dim=-1)[:, :, 1:k+1]  # 排除自己
+    # # 计算距离最近的 k 个点 (用欧氏距离)
+    # dist = pairwise_distance(vertices)  # (B, N, N)
+    # sorted_dist, knn_idx = jt.argsort(dist, dim=-1)
+    # knn_idx = knn_idx[:, :, 1:k+1]
 
-    # Gather KNN 权重
-    knn_weights = []
-    for i in range(k):
-        knn_weights.append(weights.gather(1, knn_idx[:, :, i:i+1].broadcast((B, N, J))))
-    knn_mean = sum(knn_weights) / k
+    # # Gather KNN 权重
+    # knn_weights = []
+    # for i in range(k):
+    #     knn_weights.append(weights.gather(1, knn_idx[:, :, i:i+1].broadcast((B, N, J))))
+    # knn_mean = sum(knn_weights) / k
 
-    return jt.norm(weights - knn_mean, dim=-1).mean()
+    # return jt.norm(weights - knn_mean, dim=-1).mean()
+    return jt.norm(weights - weights.mean(dim=1, keepdim=True), dim=-1).mean()
 
 def sparsity_loss(weights):
     """
     weights: (B, N, J)
     """
-    return jt.abs(weights).sum(dim=-1).mean()
-
-def chamfer_distance(p1, p2):
-    """
-    p1, p2: (B, N, 3)
-    return: scalar loss
-    """
-    from jittor.nn import pairwise_distance
-    dist1 = pairwise_distance(p1, p2).min(dim=-1)[0]
-    dist2 = pairwise_distance(p2, p1).min(dim=-1)[0]
-    return dist1.mean() + dist2.mean()
+    return jt.norm(weights, p=1, dim=-1).mean()
 
 def train(args, name):
     """
@@ -83,8 +55,8 @@ def train(args, name):
     Args:
         args: Command line arguments
     """
-    wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
-    wandb.init(project="jittor", name=name)
+    # wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
+    wandb.init(project="jittor", name=name,mode = "offline")
 
     # Create output directory if it doesn't exist
     if not os.path.exists(args.output_dir):
@@ -170,25 +142,22 @@ def train(args, name):
             loss_l1 = criterion_l1(outputs, skin)
             loss = loss_mse + loss_l1
 
-            # forward
-            weights = model(vertices, joints_pred)  # (B, N, J)
-
             # LBS重建
-            V_recon = compute_lbs(vertices, joints_T, joints_pred, weights)
-            lbs_loss = chamfer_distance(V_recon, vertices)
+            # V_recon = compute_lbs(vertices, joints, joints_pred, outputs)
+            # lbs_loss = chamfer_distance(V_recon, vertices)
 
             # 平滑性
-            smooth_loss = smoothness_loss(weights, vertices, k=8)
+            # smooth_loss = smoothness_loss(outputs, vertices, k=8)
 
-            # 稀疏性
-            sparse_loss = sparsity_loss(weights)
+            # # 稀疏性
+            # sparse_loss = sparsity_loss(outputs)
 
-            # 总损失组合
-            total_loss = lbs_loss + 0.1 * smooth_loss + 0.01 * sparse_loss + loss
+            # # 总损失组合
+            # total_loss = 0.5 * smooth_loss + 0.0 * sparse_loss + loss
             
             # Backward pass and optimize
             optimizer.zero_grad()
-            optimizer.backward(total_loss)
+            optimizer.backward(loss)
             optimizer.step()
             
             # Calculate statistics
@@ -199,6 +168,8 @@ def train(args, name):
             if (batch_idx + 1) % args.print_freq == 0 or (batch_idx + 1) == len(train_loader):
                 log_message(f"Epoch [{epoch+1}/{args.epochs}] Batch [{batch_idx+1}/{len(train_loader)}] "
                            f"Loss mse (L2): {loss_mse.item():.4f} Loss l1: {loss_l1.item():.4f} ")
+                        #    f"smooth loss: {smooth_loss.item():.4f} sparse loss: {sparse_loss.item():.4f} "
+                        #    f"Total Loss: {total_loss.item():.4f} ")
         
         # Calculate epoch statistics
         train_loss_mse /= len(train_loader)
@@ -318,7 +289,7 @@ def main():
                         help='Momentum for SGD optimizer')
     
 
-    name = "skin+loss"
+    name = "skinconcat"
     default_output_dir = os.path.join('output', 'skin', name)
 
     # Output parameters
