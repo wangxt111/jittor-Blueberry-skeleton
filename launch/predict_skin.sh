@@ -1,1 +1,1 @@
-python predict_skin.py --predict_data_list data/test_list.txt --data_root data --model_name skin --pretrained_model '/home/ubuntu/jittor2025_skeleton/best_model.pkl' --predict_output_dir predict --batch_size 2
+python predict_skin.py --predict_data_list data/test_list.txt --data_root data --model_name skin --pretrained_model '/home/ubuntu/jittor2025_skeleton/best_model1.pkl' --predict_output_dir predict --batch_size 8

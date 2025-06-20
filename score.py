@@ -74,7 +74,7 @@ def get_file_score(file_path: str, skeleton_model_name: str, skin_model_name: st
     return cdj2j, skinl1
 
 def get_score(skeleton_model_name: str, skin_model_name: str):
-    files = get_files("val_list_v.txt")
+    files = get_files("val_list.txt")
     cdj2js = []
     skinl1s = []
     for file in files:

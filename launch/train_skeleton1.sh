@@ -1,1 +1,1 @@
-python train_skeleton.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name pct2 --output_dir output/pct2 --batch_size 8
+python train_skeleton.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name pct2 --output_dir output/pct2 --batch_size 4

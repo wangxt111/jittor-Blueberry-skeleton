@@ -101,7 +101,7 @@ class SA_Layer(nn.Module):
         # FIX: The matrix multiplication dimensions were incorrect.
         # Original: nn.bmm(x_v, attention) -> [B, C, N] x [B, N, N] -> Invalid
         # Correct: nn.bmm(x_v, attention.permute(0, 2, 1)) -> [B, C, N] x [B, N, N] -> Valid
-        x_r = nn.bmm(x_v, attention.permute(0, 2, 1))
+        x_r = nn.bmm(x_v, attention)
         
         x_r = self.act(self.after_norm(self.trans_conv(x - x_r)))
         x = x + x_r

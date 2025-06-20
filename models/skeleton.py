@@ -7,11 +7,9 @@ import sys
 
 # Import the PCT model components
 # 假设 pct_n.py 文件与此文件在同一目录下或在Python路径中
-from PCT.networks.cls.pct_n import Point_Transformer, Point_Transformer_Big, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group, Point_Transformer_Symmetric
-from PCT.networks.cls.pct import Point_Transformer_Multi
+from PCT.networks.cls.pct_n import Point_Transformer_Big, Point_Transformer2, Point_Transformer_Last, SA_Layer, Local_op, sample_and_group, Point_Transformer_Symmetric
+from PCT.networks.cls.pct import Point_Transformer_Multi,Point_Transformer
 
-
-from .ptv3_jittor import PointTransformerV3
 
 class SimpleSkeletonModel(nn.Module):
     def __init__(self, feat_dim: int, output_channels: int):
