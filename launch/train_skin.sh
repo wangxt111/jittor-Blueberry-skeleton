@@ -1,1 +1,1 @@
-python train_skin.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name skin
+python train_skin.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name skin_no_joints

@@ -268,7 +268,7 @@ def main():
     
     # Model parameters
     parser.add_argument('--model_name', type=str, default='pct',
-                        choices=['pct', 'pct2', 'custom_pct', 'skin'],
+                        choices=['pct', 'pct2', 'custom_pct', 'skin', 'skin_no_joints'],
                         help='Model architecture to use')
     parser.add_argument('--model_type', type=str, default='standard',
                         choices=['standard', 'enhanced'],
@@ -292,7 +292,7 @@ def main():
                         help='Momentum for SGD optimizer')
     
 
-    name = "skinconcat"
+    name = "skin_no_joints"
     default_output_dir = os.path.join('output', 'skin', name)
 
     # Output parameters
