@@ -7,7 +7,7 @@ import os
 from typing import List, Dict, Callable, Union
 
 from .asset import Asset
-from .sampler import Sampler
+from .sampler_new import SamplerEven
 
 def transform(asset: Asset):
     """
@@ -49,7 +49,7 @@ class RigDataset(Dataset):
         train: bool,
         batch_size: int,
         shuffle: bool,
-        sampler: Sampler,
+        sampler: SamplerEven,
         transform: Union[Callable, None] = None,
         return_origin_vertices: bool = False
     ):
@@ -137,7 +137,7 @@ def get_dataloader(
     train: bool,
     batch_size: int,
     shuffle: bool,
-    sampler: Sampler,
+    sampler: SamplerEven,
     transform: Union[Callable, None] = None,
     return_origin_vertices: bool = False,
 ):
