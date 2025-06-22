@@ -7,7 +7,7 @@ import os
 import trimesh
 
 from scipy.spatial.transform import Rotation as R
-from .sampler import Sampler
+from .sampler_new import SamplerEven
 from .exporter import Exporter
 
 def axis_angle_to_matrix(axis_angle: ndarray) -> ndarray:
@@ -193,7 +193,7 @@ class Asset(Exporter):
         self.vertex_normals = mesh.vertex_normals.copy()
         self.face_normals = mesh.face_normals.copy()
     
-    def sample(self, sampler: Sampler) -> 'SampledAsset':
+    def sample(self, sampler: SamplerEven) -> 'SampledAsset':
         '''
         return sampled asset for model input
         '''
