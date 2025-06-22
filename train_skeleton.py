@@ -49,39 +49,31 @@ def find_reflaection_plane_colomna(target, pairs=None): # pairs is not used insi
     target: Jittor tensor (B, N, 3) 关节点坐标
     返回：c (B, 3), n (B, 3) 表示过点c、法向量为n的对称平面
     """
-    # 获取脊柱节点
+    # 脊柱节点
     spine_nodes = target[:, 0:6, :]  # (B, 6, 3)
     
-    # 1. 计算脊柱节点的中心点作为平面中心
+    # 脊柱节点的中心点作为平面中心
     c = spine_nodes.mean(dim=1)  # (B, 3)
     
-    # 2. 计算脊柱方向向量
+    # 脊柱方向向量
     spine_start = spine_nodes[:, 0, :]  # (B, 3)
     spine_end = spine_nodes[:, -1, :]   # (B, 3)
     spine_dir = spine_end - spine_start  # (B, 3)
-    # 避免除以零
+
     spine_dir_norm = jt.norm(spine_dir, dim=-1, keepdims=True)
     spine_dir = spine_dir / (spine_dir_norm + 1e-6)
-    
-    # 3. 计算垂直于脊柱方向的向量作为平面法向量
-    # 使用脊柱节点拟合一个平面
+
     spine_centered = spine_nodes - c.unsqueeze(1)  # (B, 6, 3)
     
-    # 计算协方差矩阵 (Jittor的batch matmul)
-    # (B, 3, 6) @ (B, 6, 3) -> (B, 3, 3)
     cov = jt.matmul(spine_centered.permute(0, 2, 1), spine_centered) 
     
-    # 计算特征值和特征向量 (Jittor的SVD支持batch)
     U, S, V = jt.linalg.svd(cov)
     
-    # 取最小特征值对应的特征向量作为平面法向量
     n = U[:, :, -1]  # (B, 3)
     
-    # 确保法向量方向一致性：如果法向量与脊柱方向点积为负，则反转法向量
     dot_product = (n * spine_dir).sum(dim=-1, keepdims=True)
     n = jt.where(dot_product < 0, -n, n) 
     
-    # 单位化法向量
     n_norm = jt.norm(n, dim=-1, keepdims=True)
     n = n / (n_norm + 1e-6)
     
@@ -89,7 +81,7 @@ def find_reflaection_plane_colomna(target, pairs=None): # pairs is not used insi
 
 def symmetry_loss(pred, target, pairs):
     """
-    每个样本独立推断对称平面，根据反射点计算对称损失
+    计算对称平面，根据反射点计算对称损失
     pred: (B, J, 3)
     target: (B, J, 3)
     pairs: 对称点对列表
@@ -125,10 +117,6 @@ def topology_loss(pred, target, parents):
 def chamfer_distance_jittor(set_a, set_b):
     """
     计算两个点集之间的Chamfer Distance。
-    set_a: Jittor tensor (B, N, 3) 或 (B, J, 3)
-    set_b: Jittor tensor (B, M, 3) 或 (B, J, 3)
-
-    返回: Jittor tensor (scalar) - 批次平均的 Chamfer Distance (平方距离)。
     """
     # 计算 set_a 中每个点到 set_b 中所有点的平方欧氏距离
     dist_ab_sq = jt.sum((set_a.unsqueeze(2) - set_b.unsqueeze(1))**2, dim=-1) # (B, N, M)
@@ -159,11 +147,11 @@ def relative_position_loss(pred, target):
     target_rel = target - target_center
     return jt.norm(pred_rel - target_rel, dim=-1).mean()
 
-# --- 数据增强函数 (操作 NumPy 数组) ---
+# 数据增强
 
 def np_random_rotate_3d(vertices, joints, max_angle=30):
     """
-    随机旋转3D模型 (NumPy版本)
+    随机旋转3D模型
     Args:
         vertices: 顶点坐标 (N, 3)
         joints: 骨骼节点位置 (J, 3)
@@ -181,7 +169,7 @@ def np_random_rotate_3d(vertices, joints, max_angle=30):
 
 def np_random_scale(vertices, joints, scale_range=(0.9, 1.1)):
     """
-    随机缩放3D模型 (NumPy版本)
+    随机缩放3D模型
     Args:
         vertices: 顶点坐标 (N, 3)
         joints: 骨骼节点位置 (J, 3)
@@ -198,7 +186,7 @@ def np_random_scale(vertices, joints, scale_range=(0.9, 1.1)):
 
 def np_add_gaussian_noise(vertices, noise_std=0.01):
     """
-    添加高斯噪声到顶点 (NumPy版本)
+    添加高斯噪声到顶点
     Args:
         vertices: 顶点坐标 (N, 3)
         noise_std: 噪声标准差
@@ -210,7 +198,7 @@ def np_add_gaussian_noise(vertices, noise_std=0.01):
 
 def np_random_joint_perturbation(joints, max_offset=0.02):
     """
-    随机扰动骨骼节点位置 (NumPy版本)
+    随机扰动骨骼节点位置
     Args:
         joints: 骨骼节点位置 (J, 3)
         max_offset: 最大偏移量
@@ -220,8 +208,6 @@ def np_random_joint_perturbation(joints, max_offset=0.02):
     offset = np.random.uniform(-max_offset, max_offset, joints.shape)
     return joints + offset
 
-# --- 批处理数据增强函数 (在 Jittor 与 NumPy 之间转换) ---
-
 def augment_data_for_batch(vertices_batch_jt, joints_batch_jt, 
                            rotate=True, scale=True, add_noise=True, perturb_joints=True,
                            max_angle=30, scale_range=(0.9, 1.1), noise_std=0.01, max_offset=0.02):
@@ -230,7 +216,6 @@ def augment_data_for_batch(vertices_batch_jt, joints_batch_jt,
     Args:
         vertices_batch_jt: Jittor Tensor, 顶点数据 (B, N, 3)
         joints_batch_jt: Jittor Tensor, 骨骼节点数据 (B, J, 3)
-        ... (增强参数)
     Returns:
         augmented_vertices_batch_jt: Jittor Tensor, 增强后的顶点数据 (B, N, 3)
         augmented_joints_batch_jt: Jittor Tensor, 增强后的骨骼节点数据 (B, J, 3)

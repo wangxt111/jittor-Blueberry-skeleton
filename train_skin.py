@@ -28,7 +28,6 @@ def smoothness_loss(weights, vertices, k=8):
     # """
     # B, N, J = weights.shape
 
-    # # 计算距离最近的 k 个点 (用欧氏距离)
     # dist = pairwise_distance(vertices)  # (B, N, N)
     # sorted_dist, knn_idx = jt.argsort(dist, dim=-1)
     # knn_idx = knn_idx[:, :, 1:k+1]
@@ -225,15 +224,13 @@ def train(args, name):
             val_loss_mse /= len(val_loader)
             val_loss_l1 /= len(val_loader)
             
-            log_message(f"Validation Loss: mse (L2): {val_loss_mse:.4f} l1: {val_loss_l1:.4f} ") # 打印验证集交叉熵损失
+            log_message(f"Validation Loss: mse (L2): {val_loss_mse:.4f} l1: {val_loss_l1:.4f} ")
             wandb.log({
                 "skin epoch": epoch + 1,
                 "skin val_loss_mse": val_loss_mse,
                 "skin val_loss_l1": val_loss_l1,
             },step=global_step)
             
-            # Save best model - 考虑哪个损失作为最佳模型的评判标准
-            # 这里仍然使用 val_loss_l1 作为评判标准，您可以根据需要更改为 val_loss_cross_entropy 或组合损失
             if val_loss_l1 < best_loss: 
                 best_loss = val_loss_l1
                 model_path = os.path.join(args.output_dir, 'best_model.pkl')

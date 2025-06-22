@@ -8,7 +8,7 @@ import random
 from dataset.dataset import get_dataloader, transform
 from dataset.sampler import SamplerMix
 from models.skeleton import create_model
-from models.metrics import J2J  # 你已有的 Chamfer 距离计算函数
+from models.metrics import J2J
 
 # python predict_skeleton.py --predict_data_list data/test_list.txt --data_root data --model_name pct --pretrained_model /home/ubuntu/jittor2025_skeleton/output/base+J2Jloss+no_epochdata/skeleton/best_model.pkl --predict_output_dir predict1 --batch_size 16
 

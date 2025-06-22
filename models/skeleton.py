@@ -96,7 +96,7 @@ class SimpleSkeletonModel_Symmetric(nn.Module):
         joints = pred.view(B, J, 3)
 
         joints_sym = self.symmetric_average(joints)
-        return joints_sym.reshape(B, -1) # 返回 (B, J*3) 的形状
+        return joints_sym.reshape(B, -1)
 
 class MultiSkeletonModel(nn.Module):
     def __init__(self, feat_dim: int, output_channels: int):
@@ -163,7 +163,6 @@ class SymSkeletonModel(nn.Module):
         vertices: [B, N, 3]
         return: joints [B, 66]
         """
-        # FIX: Point_Transformer expects input shape (B, C, N).
         x = self.transformer(vertices.permute(0, 2, 1)) # [B, feat_dim]
         joint_pred = self.mlp_joint(x)               # [B, 42]
         plane_pred = self.mlp_plane(x)               # [B, 4]
@@ -208,7 +207,7 @@ class SymSkeletonModelnc(nn.Module):
             nn.Linear(feat_dim, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
-            nn.Linear(512, len(self.direct_joints)*3),  # 14 joints × 3 coords
+            nn.Linear(512, len(self.direct_joints)*3),
         )
 
         self.mlp_plane = nn.Sequential(
