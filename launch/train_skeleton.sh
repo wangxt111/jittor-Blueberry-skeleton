@@ -1,1 +1,1 @@
-python train_skeleton.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name multihead
+python train_skeleton.py --train_data_list data/train_list.txt --val_data_list data/val_list.txt --data_root data --model_name multihead --batch_size 16

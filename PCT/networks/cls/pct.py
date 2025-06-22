@@ -30,7 +30,6 @@ def sample_and_group(npoint, nsample, xyz, points):
     return new_xyz, new_points
 
 
-
 class Point_Transformer2(nn.Module):
     def __init__(self, output_channels=40):
         super(Point_Transformer2, self).__init__()

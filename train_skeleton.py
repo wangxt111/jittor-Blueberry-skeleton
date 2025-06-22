@@ -10,7 +10,7 @@ from jittor import nn
 from jittor import optim
 
 from dataset.dataset import get_dataloader, transform
-from dataset.sampler import SamplerMix
+from dataset.sampler_new import SamplerEven
 from dataset.exporter import Exporter
 from models.skeleton import create_model
 from dataset.format import parents
@@ -277,7 +277,7 @@ def train(args,name):
     Args:
         args: Command line arguments
     """
-    # wandb.login(key="d485e6ef46797558aec48309977203a6795b178f")
+    wandb.login(key="237f5f006b70965c90d08069c63cc560ae78feb4")
     wandb.init(project="jittor", name=name)
 
     # Create output directory if it doesn't exist
@@ -303,7 +303,7 @@ def train(args,name):
         input_channels=3
     )
     
-    sampler = SamplerMix(num_samples=1024, vertex_samples=512)
+    sampler = SamplerEven(num_samples=2048,export_path=os.path.join(args.output_dir, 'sampled.ply'))
     
     # Load pre-trained model if specified
     if args.pretrained_model:
@@ -399,8 +399,8 @@ def train(args,name):
             # loss_cd = chamfer_distance_jittor(joints_pred, joints_gt)
             # loss_J2J += J2J(outputs[i].reshape(-1, 3), joints[i].reshape(-1, 3)).item() / outputs.shape[0]
 
-            loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
-            # loss_J2J = cd_j2j_loss(joints_pred, joints_gt)
+            # loss_J2J = chamfer_distance_jittor(joints_pred, joints_gt)
+            loss_J2J = cd_j2j_loss(joints_pred, joints_gt)
             loss = loss_pos + args.lambda_topo * loss_topo + args.lambda_rel * loss_rel + args.lambda_sym * loss_sym + args.lambda_cd * loss_J2J
 
             # Backward pass and optimize
@@ -578,7 +578,7 @@ def main():
     from datetime import datetime
     import os
 
-    name = "pct2_all"
+    name = "multi+bacth16+newsampler"
     default_output_dir = os.path.join('output', 'skeleton', name)
 
     # Output parameters
